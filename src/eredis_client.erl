@@ -45,7 +45,7 @@
           socket :: port() | undefined,
           parser_state :: #pstate{} | undefined,
           queue :: eredis_queue() | undefined,
-          transport:: gen_tcp | ssl
+          transport :: gen_tcp | ssl
 }).
 
 %%
@@ -224,10 +224,50 @@ terminate(_Reason, #state{transport = Transport} = State) ->
         Socket    -> Transport:close(Socket)
     end,
     ok.
-
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
+%% Down 0.6.2 -> 0.6.1
+code_change({down, _V}, #state{host = Host,
+                               port = Port,
+                               password = Password,
+                               database = Database,
+                               sentinel = Sential,
+                               reconnect_sleep = ReconnectSleep,
+                               connect_timeout = ConnectTimeout,
+                               socket = Socket,
+                               parser_state = ParserState,
+                               queue = Queue}, _) ->
+    {ok, #state{host = Host,
+                port = Port,
+                password = Password,
+                database = Database,
+                sentinel = Sential,
+                reconnect_sleep = ReconnectSleep,
+                connect_timeout = ConnectTimeout,
+                socket = Socket,
+                parser_state = ParserState,
+                queue = Queue}};
+%% Up 0.6.1 -> 0.6.2
+code_change(_V, #state{host = Host,
+                       port = Port,
+                       password = Password,
+                       database = Database,
+                       sentinel = Sential,
+                       reconnect_sleep = ReconnectSleep,
+                       connect_timeout = ConnectTimeout,
+                       socket = Socket,
+                       parser_state = ParserState,
+                       queue = Queue}, _) ->
+    {ok, #state{host = Host,
+                port = Port,
+                password = Password,
+                database = Database,
+                sentinel = Sential,
+                reconnect_sleep = ReconnectSleep,
+                connect_timeout = ConnectTimeout,
+                socket = Socket,
+                parser_state = ParserState,
+                queue = Queue,
+                options = [], % Up to 0.6.2
+                transport = gen_tcp}}. % Up to 0.6.2
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
@@ -392,11 +432,10 @@ connect_with_ssl(State) ->
     end.
 
 get_tcp_options(State) ->
-    {ok, {AFamily, _}} = get_addr(State#state.host),
     TcpOptions = proplists:get_value(tcp_options , State#state.options, []),
     case TcpOptions of
-        [] -> [AFamily | ?SOCKET_OPTS];
-        _ -> [AFamily | TcpOptions]
+        [] -> ?SOCKET_OPTS;
+        _ -> TcpOptions
     end.
 
 handle_connect(State, {ok, Transport, Socket}) ->

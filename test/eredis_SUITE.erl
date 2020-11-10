@@ -9,7 +9,7 @@
 %% Setups
 %%--------------------------------------------------------------------
 all() ->
-    [{group, ssl}].
+    [{group, ssl}, {group, tcp}].
 groups() ->
     Cases = [get_set_test,
              delete_test,
@@ -20,7 +20,7 @@ groups() ->
              pipeline_mixed_test,
              q_noreply_test,
              q_async_test],
-    [{ssl, Cases}].
+    [{ssl, Cases}, {tcp, Cases}].
 init_per_suite(_Cfg) ->
     _Cfg.
 
@@ -34,34 +34,41 @@ end_per_group(_Group, _Cfg) ->
     ok.
 %%--------------------------------------------------------------------
 
-connect_ssl() ->
-    Options = [{ssl_options, [{cacertfile, "/Users/wangwenhai/github/emqx-enterprise-rel/_checkouts/eredis/test/eredis_SUITE_data/certs/ca.crt"},
-                              {certfile, "/Users/wangwenhai/github/emqx-enterprise-rel/_checkouts/eredis/test/eredis_SUITE_data/certs/redis.crt"},
-                              {keyfile, "/Users/wangwenhai/github/emqx-enterprise-rel/_checkouts/eredis/test/eredis_SUITE_data/certs/redis.key"}]},
-               {tcp_options ,[{reuseaddr, true}]}],
-    {ok, SSLClient} = eredis:start_link("127.0.0.1", 6379, 0, "", 3000, 5000, Options),
+connect_ssl(DataDir) ->
+    Options = [{ssl_options, [{cacertfile, DataDir ++ "certs/ca.crt"},
+                              {certfile, DataDir ++ "certs/redis.crt"},
+                              {keyfile, DataDir ++ "certs/redis.key"}]},
+               {tcp_options ,[]}],
+    {ok, SSLClient} = eredis:start_link("127.0.0.1", 6378, 0, "", 3000, 5000, Options),
     SSLClient.
 
 connect_tcp() ->
     {ok, TcpClient} = eredis:start_link("127.0.0.1", 6379),
     TcpClient.
 
-c(T) ->
+c(Config) ->
+    {t, T} = lists:keyfind(t, 1, Config),
     case T of
-        tcp -> C = connect_tcp(), eredis:q(C, ["flushdb"]), C;
-        ssl -> C = connect_ssl(), eredis:q(C, ["flushdb"]), C
+        ssl -> 
+            {data_dir, DataDir} = lists:keyfind(data_dir, 1, Config),
+            C = connect_ssl(DataDir),
+            eredis:q(C, ["flushdb"]),
+            C;
+        _ ->
+            C = connect_tcp(),
+            eredis:q(C, ["flushdb"]),
+            C
     end.
 
 get_set_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
     ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo])),
     ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
     ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo])).
 
-
 delete_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
 
     ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
@@ -69,7 +76,7 @@ delete_test(Config) ->
     ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo])).
 
 mset_mget_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     Keys = lists:seq(1, 10),
 
     ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys])),
@@ -82,7 +89,7 @@ mset_mget_test(Config) ->
     ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys])).
 
 exec_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
 
     ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "b"])),
     ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "a"])),
@@ -99,8 +106,8 @@ exec_test(Config) ->
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", "k1", "k2"])).
 
 exec_nil_test(Config) ->
-    C1 = c(proplists:get_value(t, Config, tcp)),
-    C2 = c(proplists:get_value(t, Config, tcp)),
+    C1 = c(Config),
+    C2 = c(Config),
 
     ?assertEqual({ok, <<"OK">>}, eredis:q(C1, ["WATCH", "x"])),
     ?assertMatch({ok, _}, eredis:q(C2, ["INCR", "x"])),
@@ -110,7 +117,7 @@ exec_nil_test(Config) ->
     ?assertMatch({ok, _}, eredis:q(C1, ["DEL", "x"])).
 
 pipeline_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
 
     P1 = [["SET", a, "1"],
           ["LPUSH", b, "3"],
@@ -133,7 +140,7 @@ pipeline_test(Config) ->
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", a, b])).
 
 pipeline_mixed_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     P1 = [["LPUSH", c, "1"] || _ <- lists:seq(1, 100)],
     P2 = [["LPUSH", d, "1"] || _ <- lists:seq(1, 100)],
     Expect = [{ok, list_to_binary(integer_to_list(I))} || I <- lists:seq(1, 100)],
@@ -148,13 +155,13 @@ pipeline_mixed_test(Config) ->
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", c, d])).
 
 q_noreply_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     ?assertEqual(ok, eredis:q_noreply(C, ["GET", foo])),
     ?assertEqual(ok, eredis:q_noreply(C, ["SET", foo, bar])),
     %% Even though q_noreply doesn't wait, it is sent before subsequent requests:
     ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo])).
 q_async_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
     ?assertEqual(ok, eredis:q_async(C, ["GET", foo], self())),
     receive
@@ -167,7 +174,7 @@ undefined_database_test() ->
     ?assertMatch({ok,_}, eredis:start_link("localhost", 6379, undefined)).
 
 tcp_closed_test(Config) ->
-    C = c(proplists:get_value(t, Config, tcp)),
+    C = c(Config),
     tcp_closed_rig(C).
 
 tcp_closed_rig(C) ->

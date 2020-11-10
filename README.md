@@ -286,7 +286,7 @@ the same as you find in Erldis, most notably the queueing of requests.
 Options = [{ssl_options, [{cacertfile, "CA"},
                           {certfile, "Cert"},
                           {keyfile, "Key"}]},
-           {tcp_options, [{reuseaddr, true}]}].
+           {tcp_options, []}].
 {ok, C1} = eredis:start_link("127.0.0.1", 6379, 0, "", 100, 5000, Options).
 
 {ok,<<"OK">>} = eredis:q(C1, ["SET", ssl, ok]).
