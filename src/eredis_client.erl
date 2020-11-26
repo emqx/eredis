@@ -386,7 +386,6 @@ connect_with_ssl(State, Options) ->
     SslOptions = proplists:get_value(ssl_options , Options, []),
     case ssl:connect(Addr, State#state.port, TCPOptions ++ SslOptions, State#state.connect_timeout) of
         {ok, SSLSocket} ->
-            ok = ssl:setopts(SSLSocket, get_tcp_options(State)),
             handle_connect(State, {ok, ssl, SSLSocket});
         {error, Reason} ->
             handle_connect_error(error, Reason)
