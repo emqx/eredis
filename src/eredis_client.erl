@@ -43,9 +43,7 @@
           connect_timeout :: integer() | undefined,
           socket :: port() | undefined,
           parser_state :: #pstate{} | undefined,
-          queue :: eredis_queue() | undefined,
-          transport :: gen_tcp | ssl,
-          options :: list()
+          queue :: eredis_queue() | undefined
 }).
 
 %%
@@ -87,6 +85,7 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
         "sentinel:"++MasterStr -> list_to_atom(MasterStr);
          _ -> undefined
     end,
+    erlang:put(options, Options),
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
@@ -95,10 +94,9 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
                    queue = queue:new(),
-                   options = Options,
                    sentinel = Sentinel},
 
-    case connect(State) of
+    case connect(State, Options) of
         {ok, NewState} ->
             {ok, NewState};
         {error, Reason} ->
@@ -115,7 +113,8 @@ handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 
 %% Send 
-handle_call({send, Command}, _From, #state{transport = Transport, socket = Socket} = State) ->
+handle_call({send, Command}, _From, #state{socket = Socket} = State) ->
+    Transport = get_tranport(),
     ok = Transport:setopts(Socket, [{active, false}]),
     case Transport:send(Socket, Command) of
         ok ->
@@ -218,56 +217,18 @@ handle_info(stop, State) ->
 handle_info(_Info, State) ->
     {stop, {unhandled_message, _Info}, State}.
 
-terminate(_Reason, #state{transport = Transport} = State) ->
+terminate(_Reason, State) ->
+
+    Transport = get_tranport(),
     case State#state.socket of
         undefined -> ok;
         Socket    -> Transport:close(Socket)
     end,
     ok.
 %% Down
-code_change({down, _V}, #state{host = Host,
-                               port = Port,
-                               password = Password,
-                               database = Database,
-                               sentinel = Sential,
-                               reconnect_sleep = ReconnectSleep,
-                               connect_timeout = ConnectTimeout,
-                               socket = Socket,
-                               parser_state = ParserState,
-                               queue = Queue}, _) ->
-    {ok, {state, Host,
-                 Port,
-                 Password,
-                 Database,
-                 Sential,
-                 ReconnectSleep,
-                 ConnectTimeout,
-                 Socket,
-                 ParserState,
-                 Queue}};
-%% Up
-code_change(_V, #state{host = Host,
-                       port = Port,
-                       password = Password,
-                       database = Database,
-                       sentinel = Sential,
-                       reconnect_sleep = ReconnectSleep,
-                       connect_timeout = ConnectTimeout,
-                       socket = Socket,
-                       parser_state = ParserState,
-                       queue = Queue}, _) ->
-    {ok, {state, Host,
-                 Port,
-                 Password,
-                 Database,
-                 Sential,
-                 ReconnectSleep,
-                 ConnectTimeout,
-                 Socket,
-                 ParserState,
-                 Queue,
-                 gen_tcp, % New state
-                 []}}. % New state
+code_change(_, State, _) ->
+    {ok, State}.
+
 %%--------------------------------------------------------------------
 %%% Internal functions
 %%--------------------------------------------------------------------
@@ -279,7 +240,8 @@ code_change(_V, #state{host = Host,
 do_request(_Req, _From, #state{socket = undefined} = State) ->
     {reply, {error, no_connection}, State};
 
-do_request(Req, From,#state{transport = Transport} = State) ->
+do_request(Req, From, State) ->
+    Transport = get_tranport(),
     case Transport:send(State#state.socket, Req) of
         ok ->
             NewQueue = queue:in({1, From}, State#state.queue),
@@ -295,7 +257,8 @@ do_request(Req, From,#state{transport = Transport} = State) ->
 do_pipeline(_Pipeline, _From, #state{socket = undefined} = State) ->
     {reply, {error, no_connection}, State};
 
-do_pipeline(Pipeline, From, #state{transport = Transport} = State) ->
+do_pipeline(Pipeline, From, State) ->
+    Transport = get_tranport(),
     case Transport:send(State#state.socket, Pipeline) of
         ok ->
             NewQueue = queue:in({length(Pipeline), From, []}, State#state.queue),
@@ -388,38 +351,40 @@ safe_send(Pid, Value) ->
 %% returns something we don't expect, we crash. Returns {ok, State} or
 %% {SomeError, Reason}.
 
-connect(#state{sentinel = undefined} = State) ->
-    connect1(State);
-connect(#state{sentinel = Master} = State) ->
+connect(#state{sentinel = undefined} = State, Options) ->
+    connect1(State, Options);
+connect(#state{sentinel = Master} = State, Options) ->
     case eredis_sentinel:get_master(Master, true) of
         {ok, {Host, Port}} ->
-            connect1(State#state{host=Host, port=Port});
+            connect1(State#state{host=Host, port=Port}, Options);
         {error, Error} ->
             {error, {sentinel_error, Error}}
     end.
 
-connect1(State) ->
-    case proplists:get_value(ssl_options , State#state.options, []) of
+connect1(State, Options) ->
+    case proplists:get_value(ssl_options , Options, []) of
         [] ->
-            connect_with_tcp(State);
+            connect_with_tcp(State, Options);
         _ ->
-            connect_with_ssl(State)
+            connect_with_ssl(State, Options)
     end.
 
-connect_with_tcp(State) ->
-    {ok, {_, Addr}} = get_addr(State#state.host),
-    case gen_tcp:connect(Addr, State#state.port, get_tcp_options(State), State#state.connect_timeout) of
+connect_with_tcp(State, Options) ->
+    {ok, {AFamily, Addr}} = get_addr(State#state.host),
+    TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
+    case gen_tcp:connect(Addr, State#state.port, TCPOptions, State#state.connect_timeout) of
         {ok, Socket} ->
             handle_connect(State, {ok, gen_tcp, Socket});
         {error, Reason} ->
             handle_connect_error(error, Reason)
     end.
 
-connect_with_ssl(State) ->
-    {ok, {_, Addr}} = get_addr(State#state.host),
-    {ok, _}  = application:ensure_all_started(ssl),
-    SslOptions =  proplists:get_value(ssl_options , State#state.options, []),
-    case ssl:connect(Addr, State#state.port, SslOptions, State#state.connect_timeout) of
+connect_with_ssl(State, Options) ->
+    _ = application:ensure_all_started(ssl),
+    {ok, {AFamily, Addr}} = get_addr(State#state.host),
+    TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
+    SslOptions = proplists:get_value(ssl_options , Options, []),
+    case ssl:connect(Addr, State#state.port, TCPOptions ++ SslOptions, State#state.connect_timeout) of
         {ok, SSLSocket} ->
             ok = ssl:setopts(SSLSocket, get_tcp_options(State)),
             handle_connect(State, {ok, ssl, SSLSocket});
@@ -427,8 +392,8 @@ connect_with_ssl(State) ->
             handle_connect_error(error, Reason)
     end.
 
-get_tcp_options(State) ->
-    TcpOptions = proplists:get_value(tcp_options , State#state.options, []),
+get_tcp_options(_State, Options) ->
+    TcpOptions = proplists:get_value(tcp_options , Options, []),
     case TcpOptions of
         [] -> ?SOCKET_OPTS;
         _ -> TcpOptions
@@ -439,7 +404,8 @@ handle_connect(State, {ok, Transport, Socket}) ->
         ok ->
             case select_database(Socket, State#state.database) of
                 ok ->
-                    {ok, State#state{socket = Socket, transport = Transport}};
+                    erlang:put(transport, Transport),
+                    {ok, State#state{socket = Socket}};
                 {error, Reason} ->
                     {error, {select_error, Reason}}
             end;
@@ -485,9 +451,14 @@ do_sync_command(_Socket, Command) ->
 %% @doc: Loop until a connection can be established, this includes
 %% successfully issuing the auth and select calls. When we have a
 %% connection, give the socket to the redis client.
-reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep, transport = Transport} = State) ->
-    case catch(connect(State)) of
+reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep} = State) ->
+    Options = case erlang:get(options) of
+        undefined -> [];
+        Opts -> Opts
+    end,
+    case catch(connect(State, Options)) of
         {ok, #state{socket = Socket, host=Host, port=Port}} ->
+            Transport = get_tranport(),
             Client ! {connection_ready, Socket, Host, Port},
             Transport:controlling_process(Socket, Client),
             Msgs = get_all_messages([]),
@@ -543,6 +514,13 @@ start_reconnect(#state{socket=undefined} = State) ->
     %% a socket is used to signal we are "down"
     %% TODO shouldn't we need to send error reply to waiting clients?
     {ok, State#state{queue = queue:new()}};
-start_reconnect(#state{socket=Socket, transport = Transport} = State) ->
+start_reconnect(#state{socket=Socket} = State) ->
+    Transport = get_tranport(),
     Transport:close(Socket),
     start_reconnect(State#state{socket=undefined}).
+
+get_tranport() ->
+    case erlang:get(transport) of
+        undefined -> gen_tcp;
+        Transport -> Transport
+    end.
