@@ -60,6 +60,9 @@ c(Config) ->
             C
     end.
 
+connect_with_password(_) ->
+    {ok, _} = eredis:start_link("127.0.0.1", 637, 0, "password", 3000, 5000, []).
+
 get_set_test(Config) ->
     C = c(Config),
     ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),

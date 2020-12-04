@@ -95,7 +95,6 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
                    parser_state = eredis_parser:init(),
                    queue = queue:new(),
                    sentinel = Sentinel},
-
     case connect(State, Options) of
         {ok, NewState} ->
             {ok, NewState};
@@ -444,9 +443,28 @@ authenticate(Socket, Password) ->
 
 %% @doc: Executes the given command synchronously, expects Redis to
 %% return "+OK\r\n", otherwise it will fail.
-do_sync_command(_Socket, Command) ->
-    gen_server:call(?MODULE, {send, Command}).
 
+set_transport_opts(Socket, Opts) ->
+    case is_tuple(Socket) of
+       true -> ok = ssl:setopts(Socket, Opts), ssl;
+       false -> ok = inet:setopts(Socket, Opts), gen_tcp
+    end.
+
+do_sync_command(Socket, Command) ->
+    Transport = set_transport_opts(Socket, [{active, false}]),
+    case Transport:send(Socket, Command) of
+        ok ->
+            %% Hope there's nothing else coming down on the socket..
+            case Transport:recv(Socket, 0, ?RECV_TIMEOUT) of
+                {ok, <<"+OK\r\n">>} ->
+                    set_transport_opts(Socket, [{active, once}]),
+                    ok;
+                Other ->
+                    {error, {unexpected_data, Other}}
+            end;
+        {error, Reason} ->
+            {error, Reason}
+    end.
 %% @doc: Loop until a connection can be established, this includes
 %% successfully issuing the auth and select calls. When we have a
 %% connection, give the socket to the redis client.
