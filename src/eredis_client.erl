@@ -188,9 +188,6 @@ handle_info({tcp_closed, _Socket}, #state{reconnect_sleep = no_reconnect,
     {stop, normal, State#state{socket = undefined}};
 
 handle_info({tcp_closed, _Socket}, #state{queue = Queue} = State) ->
-    Self = self(),
-    spawn(fun() -> reconnect_loop(Self, State) end),
-
     %% tell all of our clients what has happened.
     reply_all({error, tcp_closed}, Queue),
 
