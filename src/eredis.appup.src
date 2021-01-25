@@ -8,11 +8,10 @@
     ]},
     {"1.2.0", [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]}
+    ]},
     {"1.2.1", [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
-
   ],
   [
     {"1.1.0",[
@@ -22,7 +21,7 @@
     ]},
     {"1.2.0", [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]}
+    ]},
     {"1.2.1", [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
