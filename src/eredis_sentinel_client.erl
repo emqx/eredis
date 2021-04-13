@@ -7,12 +7,15 @@
 -include("eredis_sentinel.hrl").
 
 %% API
--export([start_link/2, stop/1, get_master/2]).
+-export([start_link/2, start_link/3, stop/1, get_master/2]).
 
 %%% API ---------------------------------------------------------------
 
 start_link(Host, Port) when is_list(Host), is_integer(Port) ->
-    eredis:start_link(Host, Port, undefined, "", no_reconnect).
+    start_link(Host, Port, []).
+
+start_link(Host, Port, Opts) when is_list(Host), is_integer(Port), is_list(Opts) ->
+    eredis:start_link(Host, Port, undefined, "", no_reconnect, 5000, Opts).
 
 stop(Pid) when is_pid(Pid) ->
     catch eredis:stop(Pid).
