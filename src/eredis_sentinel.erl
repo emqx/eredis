@@ -36,7 +36,7 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, start_link/1, stop/0]).
+-export([start_link/0, start_link/1, start_link/2, stop/0]).
 -export([get_master/1, get_master/2, get_current_sentinel/0]).
 
 %% GenServer
@@ -70,8 +70,11 @@
 start_link() ->
     start_link(["localhost"]).
 
-start_link(Conf) ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, Conf, []).
+start_link(Sentinels) ->
+    start_link(Sentinels, []).
+
+start_link(Sentinels, Opts) ->
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [Sentinels, Opts], []).
 
 stop() ->
     gen_server:call(?MODULE, stop).
@@ -87,8 +90,9 @@ get_current_sentinel() ->
 
 %%% GenServer ---------------------------------------------------------
 
-init(Sentinels) ->
+init([Sentinels,  Opts]) ->
     process_flag(trap_exit, true),
+    erlang:put(redis_opts, Opts),
     State = #state{
       sentinels = [read_sentinel(S) || S <- Sentinels],
       conn_pid  = undefined,
@@ -174,7 +178,11 @@ query_master(_MasterName, #state{errors=Errors,sentinels=Sentinels} = S)
 
 %% No connected sentinel
 query_master(MasterName, #state{conn_pid=undefined, sentinels = [#sentinel{host=H,port=P} | _] } = S) ->
-    case eredis_sentinel_client:start_link(H,P) of
+    Opts = case erlang:get(redis_opts) of
+        undefined -> [];
+        Opts0 -> Opts0
+    end,
+    case eredis_sentinel_client:start_link(H,P, Opts) of
         {ok, ConnPid} ->
             query_master(MasterName, S#state{conn_pid=ConnPid});
         {error, E} ->
