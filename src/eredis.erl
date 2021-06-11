@@ -53,7 +53,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
   when is_list(Host),
        is_integer(Port),
        is_integer(Database) orelse Database == undefined,
-       is_list(Password),
+       is_list(Password) orelse is_binary(Password),
        is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect,
        is_integer(ConnectTimeout) ->
 
@@ -63,13 +63,12 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
 %% @doc: Callback for starting from poolboy
 -spec start_link(server_args()) -> {ok, Pid::pid()} | {error, Reason::term()}.
 start_link(Args) ->
-    Host           = proplists:get_value(host, Args, "127.0.0.1"),
-    Port           = proplists:get_value(port, Args, 6379),
     Database       = proplists:get_value(database, Args, 0),
     Password       = proplists:get_value(password, Args, ""),
     ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
     ConnectTimeout = proplists:get_value(connect_timeout, Args, ?TIMEOUT),
     Options = proplists:get_value(options, Args, []),
+    {Host, Port} = maybe_start_sentinel(Args),
     start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options).
 
 stop(Client) ->
@@ -158,3 +157,22 @@ to_binary(X) when is_binary(X)  -> X;
 to_binary(X) when is_integer(X) -> integer_to_binary(X);
 to_binary(X) when is_float(X)   -> throw({cannot_store_floats, X});
 to_binary(X)                    -> term_to_binary(X).
+
+maybe_start_sentinel(Args) ->
+    Options = proplists:get_value(options, Args, []),
+    case proplists:get_value(sentinel, Options) of
+        undefined ->
+            case proplists:get_value(servers, Args) of
+                undefined ->
+                    Host = proplists:get_value(host, Args, "127.0.0.1"),
+                    Port = proplists:get_value(port, Args, 6379),
+                    {Host, Port};
+                [Server| _] ->
+                    {proplists:get_value(host, Server),
+                     proplists:get_value(port, Server)}
+            end;
+        Sentinel ->
+            Servers = proplists:get_value(servers, Args, []),
+            _ = eredis_sentinel:start_link(Servers, Options),
+            {"sentinel:" ++ Sentinel, 6379}
+    end.

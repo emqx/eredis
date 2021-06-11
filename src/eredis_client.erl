@@ -54,7 +54,7 @@
                  Host::list(),
                  Port::integer(),
                  Database::integer() | undefined,
-                 Password::string(),
+                 Password::string() | binary() | undefined,
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined,
                  Options::list()
@@ -65,7 +65,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
 -spec start_link(
                  Host::list(),
                  Port::integer(),
-                 Database::integer() | undefined,
+                 Database::integer() | binary() | undefined,
                  Password::string(),
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined
@@ -89,7 +89,7 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
-                   password = list_to_binary(Password),
+                   password = l2b(Password),
                    reconnect_sleep = ReconnectSleep,
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
@@ -538,3 +538,6 @@ get_tranport() ->
         undefined -> gen_tcp;
         Transport -> Transport
     end.
+
+l2b(L) when is_list(L) -> list_to_binary(L);
+l2b(B) -> B.
