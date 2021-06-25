@@ -167,9 +167,7 @@ maybe_start_sentinel(Args) ->
                     Host = proplists:get_value(host, Args, "127.0.0.1"),
                     Port = proplists:get_value(port, Args, 6379),
                     {Host, Port};
-                [Server| _] ->
-                    {proplists:get_value(host, Server),
-                     proplists:get_value(port, Server)}
+                [{Host, Port}| _] -> {Host, Port}
             end;
         Sentinel ->
             Servers = proplists:get_value(servers, Args, []),
