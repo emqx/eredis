@@ -10,3 +10,11 @@ _build
 *.beam
 .rebar3/**
 rebar3.*
+rebar.lock
+erlang_ls.config
+.els_cache/
+# Emacs Backup files
+*~
+# Emacs temporary files
+.#*
+*#
