@@ -366,25 +366,32 @@ connect1(State, Options) ->
     end.
 
 connect_with_tcp(State, Options) ->
-    {ok, {AFamily, Addr}} = get_addr(State#state.host),
-    TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
-    case gen_tcp:connect(Addr, State#state.port, TCPOptions, State#state.connect_timeout) of
-        {ok, Socket} ->
-            handle_connect(State, {ok, gen_tcp, Socket});
-        {error, Reason} ->
-            handle_connect_error(error, Reason)
+    case get_addr(State#state.host) of
+        {ok, {AFamily, Addr}} ->
+            TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
+            case gen_tcp:connect(Addr, State#state.port, TCPOptions, State#state.connect_timeout) of
+                {ok, Socket} ->
+                    handle_connect(State, {ok, gen_tcp, Socket});
+                {error, Reason} ->
+                    handle_connect_error(error, Reason)
+            end;
+        {error, AddrReason} -> handle_connect_error(error, AddrReason)
     end.
 
 connect_with_ssl(State, Options) ->
     _ = application:ensure_all_started(ssl),
-    {ok, {AFamily, Addr}} = get_addr(State#state.host),
-    TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
-    SslOptions = proplists:get_value(ssl_options , Options, []),
-    case ssl:connect(Addr, State#state.port, TCPOptions ++ SslOptions, State#state.connect_timeout) of
-        {ok, SSLSocket} ->
-            handle_connect(State, {ok, ssl, SSLSocket});
-        {error, Reason} ->
-            handle_connect_error(error, Reason)
+    case get_addr(State#state.host) of
+        {ok, {AFamily, Addr}} ->
+            TCPOptions = [AFamily] ++ get_tcp_options(State, Options),
+            SslOptions = proplists:get_value(ssl_options , Options, []),
+            case ssl:connect(Addr, State#state.port, TCPOptions ++ SslOptions, State#state.connect_timeout) of
+                {ok, SSLSocket} ->
+                    handle_connect(State, {ok, ssl, SSLSocket});
+                {error, Reason} ->
+                    handle_connect_error(error, Reason)
+            end;
+        {error, AddrReason} ->
+            handle_connect_error(error, AddrReason)
     end.
 
 get_tcp_options(_State, Options) ->

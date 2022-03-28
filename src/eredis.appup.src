@@ -1,5 +1,5 @@
-%% -*-: erlang -*-
-{"1.2.5",
+%% -*- mode: erlang -*-
+{"1.2.6",
   [
     {"1.1.0", [
       {load_module, eredis_client, brutal_purge, soft_purge, []},
@@ -25,6 +25,7 @@
     ]},
     {"1.2.2", [
       {load_module, eredis, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
@@ -34,7 +35,11 @@
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.4", [
-      {load_module, eredis, brutal_purge, soft_purge, []}
+      {load_module, eredis, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
+    ]},
+    {"1.2.5", [
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ],
   [
@@ -62,6 +67,7 @@
     ]},
     {"1.2.2", [
       {load_module, eredis, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
@@ -71,7 +77,11 @@
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.4", [
-      {load_module, eredis, brutal_purge, soft_purge, []}
+      {load_module, eredis, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
+    ]},
+    {"1.2.5", [
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ]
 }.
