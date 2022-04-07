@@ -180,16 +180,16 @@ handle_info({tcp_error, _Socket, _Reason}, State) ->
 %% clients. If desired, spawn of a new process which will try to reconnect and
 %% notify us when Redis is ready. In the meantime, we can respond with
 %% an error message to all our clients.
-handle_info({tcp_closed, _Socket}, #state{reconnect_sleep = no_reconnect,
-                                          queue = Queue} = State) ->
-    reply_all({error, tcp_closed}, Queue),
+handle_info({Header, _Socket}, #state{reconnect_sleep = no_reconnect,
+                                          queue = Queue} = State) when Header =:= tcp_closed; Header =:= ssl_closed ->
+    reply_all({error, Header}, Queue),
     %% If we aren't going to reconnect, then there is nothing else for
     %% this process to do.
     {stop, normal, State#state{socket = undefined}};
 
-handle_info({tcp_closed, _Socket}, #state{queue = Queue} = State) ->
+handle_info({Header, _Socket}, #state{queue = Queue} = State) when Header =:= tcp_closed; Header =:= ssl_closed ->
     %% tell all of our clients what has happened.
-    reply_all({error, tcp_closed}, Queue),
+    reply_all({error, Header}, Queue),
 
     %% Throw away the socket and the queue, as we will never get a
     %% response to the requests sent on the old socket. The absence of
