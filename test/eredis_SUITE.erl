@@ -19,7 +19,8 @@ groups() ->
              pipeline_test,
              pipeline_mixed_test,
              q_noreply_test,
-             q_async_test],
+             q_async_test,
+             socket_closed_test],
     [{ssl, Cases}, {tcp, Cases}].
 init_per_suite(_Cfg) ->
     _Cfg.
@@ -38,6 +39,7 @@ connect_ssl(DataDir) ->
     Options = [{ssl_options, [{cacertfile, DataDir ++ "certs/ca.crt"},
                               {certfile, DataDir ++ "certs/redis.crt"},
                               {keyfile, DataDir ++ "certs/redis.key"}]},
+                              %% {verify, verify_peer}]},
                {tcp_options ,[]}],
     {ok, SSLClient} = eredis:start_link("127.0.0.1", 6378, 0, "", 3000, 5000, Options),
     SSLClient.
@@ -49,7 +51,7 @@ connect_tcp() ->
 c(Config) ->
     {t, T} = lists:keyfind(t, 1, Config),
     case T of
-        ssl -> 
+        ssl ->
             {data_dir, DataDir} = lists:keyfind(data_dir, 1, Config),
             C = connect_ssl(DataDir),
             eredis:q(C, ["flushdb"]),
@@ -176,25 +178,26 @@ q_async_test(Config) ->
 undefined_database_test() ->
     ?assertMatch({ok,_}, eredis:start_link("localhost", 6379, undefined)).
 
-tcp_closed_test(Config) ->
+socket_closed_test(Config) ->
     C = c(Config),
-    tcp_closed_rig(C).
+    Header = case proplists:get_value(t, Config) of
+                 ssl -> ssl_closed;
+                 tcp -> tcp_closed
+             end,
 
-tcp_closed_rig(C) ->
-
-    DoSend = fun(tcp_closed) ->
-                     C ! {tcp_closed, fake_socket};
+    DoSend = fun(H) when H =:= ssl_closed; H =:= tcp_closed ->
+                     C ! {H, fake_socket};
                 (Cmd) ->
                      eredis:q(C, Cmd)
              end,
     %% attach an id to each message for later
     Msgs = [{1, ["GET", "foo"]},
             {2, ["GET", "bar"]},
-            {3, tcp_closed}],
+            {3, Header}],
     Pids = [ remote_query(DoSend, M) || M <- Msgs ],
     Results = gather_remote_queries(Pids),
-    ?assertEqual({error, tcp_closed}, proplists:get_value(1, Results)),
-    ?assertEqual({error, tcp_closed}, proplists:get_value(2, Results)).
+    ?assertEqual({error, Header}, proplists:get_value(1, Results)),
+    ?assertEqual({error, Header}, proplists:get_value(2, Results)).
 
 remote_query(Fun, {Id, Cmd}) ->
     Parent = self(),
