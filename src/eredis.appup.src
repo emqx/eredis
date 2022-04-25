@@ -42,7 +42,7 @@
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.6", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ],
   [
@@ -87,7 +87,7 @@
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.6", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ]
 }.
