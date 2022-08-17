@@ -496,13 +496,13 @@ reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep} = State, Options
             [Client ! M || M <- Msgs];
         {error, _Reason} ->
             timer:sleep(ReconnectSleep),
-            reconnect_loop(Client, State, Options);
+            ?MODULE:reconnect_loop(Client, State, Options);
         %% Something bad happened when connecting, like Redis might be
         %% loading the dataset and we got something other than 'OK' in
         %% auth or select
         _ ->
             timer:sleep(ReconnectSleep),
-            reconnect_loop(Client, State, Options)
+            ?MODULE:reconnect_loop(Client, State, Options)
     end.
 
 read_database(undefined) ->
