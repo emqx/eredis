@@ -26,12 +26,13 @@
 
 %% API
 -export([start_link/6, start_link/7, stop/1, select_database/2]).
-
 -export([do_sync_command/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
+
+-export([reconnect_loop/3]).
 
 -record(state, {
           host :: string() | undefined,
@@ -86,6 +87,7 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
          _ -> undefined
     end,
     erlang:put(options, Options),
+    process_flag(trap_exit, true),
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
@@ -111,7 +113,7 @@ handle_call({pipeline, Pipeline}, From, State) ->
 handle_call(stop, _From, State) ->
     {stop, normal, ok, State};
 
-%% Send 
+%% Send
 handle_call({send, Command}, _From, #state{socket = Socket} = State) ->
     Transport = get_tranport(),
     ok = Transport:setopts(Socket, [{active, false}]),
@@ -122,6 +124,9 @@ handle_call({send, Command}, _From, #state{socket = Socket} = State) ->
                 {ok, <<"+OK\r\n">>} ->
                      ok = Transport:setopts(Socket, [{active, once}]),
                     {noreply, State};
+                %% {ok, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>}
+                {ok, ErrorMsg} when is_binary(ErrorMsg) ->
+                    {error, ErrorMsg};
                 Other ->
                     {error, {unexpected_data, Other}}
             end;
@@ -210,20 +215,24 @@ handle_info({sentinel, {reconnect, _MasterName, Host, Port}}, State) ->
 handle_info(stop, State) ->
     {stop, shutdown, State};
 
+handle_info({'EXIT', _ReConnPid, normal}, State) ->
+    {noreply, State};
 handle_info(_Info, State) ->
     {stop, {unhandled_message, _Info}, State}.
 
 terminate(_Reason, State) ->
+    close(State#state.socket).
 
-    Transport = get_tranport(),
-    case State#state.socket of
-        undefined -> ok;
-        Socket    -> Transport:close(Socket)
-    end,
-    ok.
 %% Down
 code_change(_, State, _) ->
     {ok, State}.
+
+close(_Transport, undefined) -> ok;
+close(Transport, Socket) ->
+    _ = Transport:close(Socket),
+    ok.
+
+close(Socket) -> close(get_tranport(), Socket).
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -409,9 +418,11 @@ handle_connect(State, {ok, Transport, Socket}) ->
                     erlang:put(transport, Transport),
                     {ok, State#state{socket = Socket}};
                 {error, Reason} ->
+                    close(Transport, Socket),
                     {error, {select_error, Reason}}
             end;
         {error, Reason} ->
+            close(Transport, Socket),
             handle_connect_error(error, {authentication_error, Reason})
     end.
 
@@ -463,6 +474,9 @@ do_sync_command(Socket, Command) ->
                 {ok, <<"+OK\r\n">>} ->
                     set_transport_opts(Socket, [{active, once}]),
                     ok;
+                %% {ok, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>}
+                {ok, ErrorMsg} when is_binary(ErrorMsg) ->
+                    {error, ErrorMsg};
                 Other ->
                     {error, {unexpected_data, Other}}
             end;
@@ -472,11 +486,7 @@ do_sync_command(Socket, Command) ->
 %% @doc: Loop until a connection can be established, this includes
 %% successfully issuing the auth and select calls. When we have a
 %% connection, give the socket to the redis client.
-reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep} = State) ->
-    Options = case erlang:get(options) of
-        undefined -> [];
-        Opts -> Opts
-    end,
+reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep} = State, Options) ->
     case catch(connect(State, Options)) of
         {ok, #state{socket = Socket, host=Host, port=Port}} ->
             Transport = get_tranport(),
@@ -486,13 +496,13 @@ reconnect_loop(Client, #state{reconnect_sleep = ReconnectSleep} = State) ->
             [Client ! M || M <- Msgs];
         {error, _Reason} ->
             timer:sleep(ReconnectSleep),
-            reconnect_loop(Client, State);
+            ?MODULE:reconnect_loop(Client, State, Options);
         %% Something bad happened when connecting, like Redis might be
         %% loading the dataset and we got something other than 'OK' in
         %% auth or select
         _ ->
             timer:sleep(ReconnectSleep),
-            reconnect_loop(Client, State)
+            ?MODULE:reconnect_loop(Client, State, Options)
     end.
 
 read_database(undefined) ->
@@ -528,7 +538,8 @@ do_sentinel_reconnect(Host, Port, State) ->
 -spec start_reconnect(#state{}) -> {ok, #state{}}.
 start_reconnect(#state{socket=undefined} = State) ->
     Self = self(),
-    spawn(fun() -> reconnect_loop(Self, State) end),
+    Options = get_options(),
+    spawn_link(?MODULE, reconnect_loop, [Self, State, Options]),
 
     %% Throw away the socket and the queue, as we will never get a
     %% response to the requests sent on the old socket. The absence of
@@ -536,9 +547,14 @@ start_reconnect(#state{socket=undefined} = State) ->
     %% TODO shouldn't we need to send error reply to waiting clients?
     {ok, State#state{queue = queue:new()}};
 start_reconnect(#state{socket=Socket} = State) ->
-    Transport = get_tranport(),
-    Transport:close(Socket),
+    close(Socket),
     start_reconnect(State#state{socket=undefined}).
+
+get_options() ->
+    case erlang:get(options) of
+        undefined -> [];
+        Opts -> Opts
+    end.
 
 get_tranport() ->
     case erlang:get(transport) of
