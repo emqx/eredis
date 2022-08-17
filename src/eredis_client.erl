@@ -32,6 +32,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
+-export([reconnect_loop/3]).
+
 -record(state, {
           host :: string() | undefined,
           port :: integer() | undefined,
@@ -84,6 +86,8 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
         "sentinel:"++MasterStr -> list_to_atom(MasterStr);
          _ -> undefined
     end,
+    erlang:put(options, Options),
+    process_flag(trap_exit, true),
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
@@ -95,8 +99,6 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
                    sentinel = Sentinel},
     case connect(State, Options) of
         {ok, NewState} ->
-            erlang:put(options, Options),
-            process_flag(trap_exit, true),
             {ok, NewState};
         {error, Reason} ->
             {stop, Reason}
@@ -122,6 +124,9 @@ handle_call({send, Command}, _From, #state{socket = Socket} = State) ->
                 {ok, <<"+OK\r\n">>} ->
                      ok = Transport:setopts(Socket, [{active, once}]),
                     {noreply, State};
+                %% {ok, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>}
+                {ok, ErrorMsg} when is_binary(ErrorMsg) ->
+                    {error, ErrorMsg};
                 Other ->
                     {error, {unexpected_data, Other}}
             end;
@@ -470,7 +475,7 @@ do_sync_command(Socket, Command) ->
                     set_transport_opts(Socket, [{active, once}]),
                     ok;
                 %% {ok, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>}
-                {ok, ErrorMsg} ->
+                {ok, ErrorMsg} when is_binary(ErrorMsg) ->
                     {error, ErrorMsg};
                 Other ->
                     {error, {unexpected_data, Other}}
@@ -534,7 +539,7 @@ do_sentinel_reconnect(Host, Port, State) ->
 start_reconnect(#state{socket=undefined} = State) ->
     Self = self(),
     Options = get_options(),
-    spawn_link(fun() -> reconnect_loop(Self, State, Options) end),
+    spawn_link(?MODULE, reconnect_loop, [Self, State, Options]),
 
     %% Throw away the socket and the queue, as we will never get a
     %% response to the requests sent on the old socket. The absence of
