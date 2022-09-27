@@ -53,7 +53,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
   when is_list(Host),
        is_integer(Port),
        is_integer(Database) orelse Database == undefined,
-       is_list(Password) orelse is_binary(Password),
+       (is_list(Password) orelse is_binary(Password) orelse is_function(Password, 0)),
        is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect,
        is_integer(ConnectTimeout) ->
 
@@ -64,7 +64,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
 -spec start_link(server_args()) -> {ok, Pid::pid()} | {error, Reason::term()}.
 start_link(Args) ->
     Database       = proplists:get_value(database, Args, 0),
-    Password       = proplists:get_value(password, Args, ""),
+    Password       = eredis_secret:wrap(proplists:get_value(password, Args, "")),
     ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
     ConnectTimeout = proplists:get_value(connect_timeout, Args, ?TIMEOUT),
     Options = proplists:get_value(options, Args, []),

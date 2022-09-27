@@ -26,7 +26,7 @@
 
 -spec start_link(Host::list(),
                  Port::integer(),
-                 Password::string(),
+                 Password::password(),
                  Database::integer(),
                  ReconnectSleep::reconnect_sleep(),
                  MaxQueueSize::integer() | infinity,
@@ -51,7 +51,7 @@ init([Host, Port, Password, Database, ReconnectSleep, MaxQueueSize, QueueBehavio
     end,
     State = #state{host            = Host,
                    port            = Port,
-                   password        = list_to_binary(Password),
+                   password        = eredis_secret:wrap(Password),
                    reconnect_sleep = ReconnectSleep,
                    channels        = [],
                    parser_state    = eredis_parser:init(),
@@ -334,7 +334,7 @@ connect1(State) ->
     case gen_tcp:connect(Addr, State#state.port,
                          [AFamily | ?SOCKET_OPTS], State#state.connect_timeout) of
         {ok, Socket} ->
-            case authenticate(Socket, State#state.password) of
+            case authenticate(Socket, get_password(State)) of
                 ok ->
                     case select_database(Socket, State#state.database) of
                         ok ->
@@ -439,3 +439,9 @@ read_database(undefined) ->
     undefined;
 read_database(Database) when is_integer(Database) ->
     list_to_binary(integer_to_list(Database)).
+
+l2b(L) when is_list(L) -> iolist_to_binary(L);
+l2b(B) -> B.
+
+get_password(#state{password = Password}) ->
+    l2b(eredis_secret:unwrap(Password)).
