@@ -2,7 +2,7 @@
 -record(state, {
           host :: string() | undefined,
           port :: integer() | undefined,
-          password :: binary() | undefined,
+          password :: password() | undefined,
           reconnect_sleep :: integer() | undefined | no_reconnect,
 
           socket :: port() | undefined,
