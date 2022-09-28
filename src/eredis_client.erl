@@ -37,7 +37,7 @@
 -record(state, {
           host :: string() | undefined,
           port :: integer() | undefined,
-          password :: binary() | undefined,
+          password :: password() | undefined,
           database :: binary() | undefined,
           sentinel :: undefined | atom(),
           reconnect_sleep :: reconnect_sleep() | undefined,
@@ -55,7 +55,7 @@
                  Host::list(),
                  Port::integer(),
                  Database::integer() | undefined,
-                 Password::string() | binary() | undefined,
+                 Password::password() | undefined,
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined,
                  Options::list()
@@ -67,7 +67,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
                  Host::list(),
                  Port::integer(),
                  Database::integer() | binary() | undefined,
-                 Password::string(),
+                 Password::password(),
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined
                 ) -> {ok, Pid::pid()} | {error, Reason::term()}.
@@ -91,7 +91,7 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
-                   password = l2b(Password),
+                   password = eredis_secret:wrap(Password),
                    reconnect_sleep = ReconnectSleep,
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
@@ -411,7 +411,7 @@ get_tcp_options(_State, Options) ->
     end.
 
 handle_connect(State, {ok, Transport, Socket}) ->
-    case authenticate(Socket, State#state.password) of
+    case authenticate(Socket, get_password(State)) of
         ok ->
             case select_database(Socket, State#state.database) of
                 ok ->
@@ -562,5 +562,8 @@ get_tranport() ->
         Transport -> Transport
     end.
 
-l2b(L) when is_list(L) -> list_to_binary(L);
+l2b(L) when is_list(L) -> iolist_to_binary(L);
 l2b(B) -> B.
+
+get_password(#state{password = Password}) ->
+    l2b(eredis_secret:unwrap(Password)).
