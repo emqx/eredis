@@ -1,5 +1,5 @@
 %% -*- mode: erlang -*-
-{"1.2.8",
+{"1.2.9",
   [
     {"1.1.0", [
       {load_module, eredis_client, brutal_purge, soft_purge, []},
@@ -38,13 +38,7 @@
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
-    {"1.2.5", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]},
-    {"1.2.6", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]},
-     {"1.2.7", [
+    {<<"1.2.[5-7]">>, [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ],
@@ -86,13 +80,7 @@
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]},
-    {"1.2.5", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]},
-    {"1.2.6", [
-     {load_module, eredis_client, brutal_purge, soft_purge, []}
-    ]},
-    {"1.2.7", [
+    {<<"1.2.[5-7]">>, [
       {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ]
