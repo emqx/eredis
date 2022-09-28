@@ -7,45 +7,58 @@
       {load_module, eredis_parser, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.0", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.1", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.2", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.3", [
       {load_module, eredis, brutal_purge, soft_purge, []},
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.4", [
       {load_module, eredis, brutal_purge, soft_purge, []},
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.5", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.6", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
      {"1.2.7", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
+    ]},
+     {"1.2.8", [
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]}
   ],
   [
@@ -55,45 +68,58 @@
       {load_module, eredis_parser, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.0", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.1", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.2", [
       {load_module, eredis, brutal_purge, soft_purge, []},
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel, brutal_purge, soft_purge, []},
       {load_module, eredis_sentinel_client, brutal_purge, soft_purge, []},
-      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []}
+      {load_module, eredis_sentinel_sup, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.3", [
       {load_module, eredis, brutal_purge, soft_purge, []},
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.4", [
       {load_module, eredis, brutal_purge, soft_purge, []},
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.5", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.6", [
-     {load_module, eredis_client, brutal_purge, soft_purge, []}
+     {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
     {"1.2.7", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
+    ]},
+     {"1.2.8", [
+      {load_module, eredis_client, brutal_purge, soft_purge, []},
+      {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]}
   ]
 }.

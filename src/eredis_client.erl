@@ -30,7 +30,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/2]).
 
 -export([reconnect_loop/3]).
 
@@ -226,6 +226,11 @@ terminate(_Reason, State) ->
 %% Down
 code_change(_, State, _) ->
     {ok, State}.
+
+format_status(_Opt, [_PDict, #state{} = State]) ->
+    [{data, [{"State", State#state{password = "******"}}]}];
+format_status(_Opt, [_PDict, State]) ->
+    [{data, [{"State", State}]}],
 
 close(_Transport, undefined) -> ok;
 close(Transport, Socket) ->
