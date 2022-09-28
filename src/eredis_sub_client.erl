@@ -233,8 +233,13 @@ terminate(_Reason, State) ->
     end,
     ok.
 
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+code_change({down, _Vsn}, #state{password = P} = State, _) ->
+    case is_function(P) of
+        true -> {ok, State#state{password = P()}};
+        false -> {ok, State}
+    end;
+code_change(_, #state{password = P} = State, _) ->
+    {ok, State#state{password = eredis_secret:wrap(P)}}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions

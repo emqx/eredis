@@ -223,9 +223,13 @@ handle_info(_Info, State) ->
 terminate(_Reason, State) ->
     close(State#state.socket).
 
-%% Down
-code_change(_, State, _) ->
-    {ok, State}.
+code_change({down, _Vsn}, #state{password = P} = State, _) ->
+    case is_function(P) of
+        true -> {ok, State#state{password = P()}};
+        false -> {ok, State}
+    end;
+code_change(_, #state{password = P} = State, _) ->
+    {ok, State#state{password = eredis_secret:wrap(P)}}.
 
 close(_Transport, undefined) -> ok;
 close(Transport, Socket) ->
