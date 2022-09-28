@@ -382,9 +382,13 @@ connect_with_tcp(State, Options) ->
                 {ok, Socket} ->
                     handle_connect(State, {ok, gen_tcp, Socket});
                 {error, Reason} ->
-                    handle_connect_error(error, Reason)
+                    connect_error(tcp_connect, State#state.host, State#state.port,
+                        #{addr => Addr, reason => Reason}
+                    )
             end;
-        {error, AddrReason} -> handle_connect_error(error, AddrReason)
+        {error, AddrReason} ->
+            connect_error(get_addr, State#state.host, State#state.port,
+                #{reason => AddrReason})
     end.
 
 connect_with_ssl(State, Options) ->
@@ -397,10 +401,13 @@ connect_with_ssl(State, Options) ->
                 {ok, SSLSocket} ->
                     handle_connect(State, {ok, ssl, SSLSocket});
                 {error, Reason} ->
-                    handle_connect_error(error, Reason)
+                    connect_error(ssl_connect, State#state.host, State#state.port,
+                        #{addr => Addr, reason => Reason}
+                    )
             end;
         {error, AddrReason} ->
-            handle_connect_error(error, AddrReason)
+            connect_error(get_addr, State#state.host, State#state.port,
+                #{reason => AddrReason})
     end.
 
 get_tcp_options(_State, Options) ->
@@ -419,15 +426,17 @@ handle_connect(State, {ok, Transport, Socket}) ->
                     {ok, State#state{socket = Socket}};
                 {error, Reason} ->
                     close(Transport, Socket),
-                    {error, {select_error, Reason}}
+                    connect_error(select_error, State#state.host, State#state.port,
+                        #{database => State#state.database, reason => Reason})
             end;
         {error, Reason} ->
             close(Transport, Socket),
-            handle_connect_error(error, {authentication_error, Reason})
+            connect_error(authentication_error, State#state.host, State#state.port,
+                #{reason => Reason})
     end.
 
-handle_connect_error(error, Reason) ->
-    {error, {connection_error, Reason}}.
+connect_error(Type, Host, Port, Details) ->
+    {error, Details#{type => Type, host => Host, port => Port}}.
 
 get_addr(Hostname) ->
     case inet:parse_address(Hostname) of
