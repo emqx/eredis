@@ -30,14 +30,14 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/2]).
 
 -export([reconnect_loop/3]).
 
 -record(state, {
           host :: string() | undefined,
           port :: integer() | undefined,
-          password :: binary() | undefined,
+          password :: password() | undefined,
           database :: binary() | undefined,
           sentinel :: undefined | atom(),
           reconnect_sleep :: reconnect_sleep() | undefined,
@@ -55,7 +55,7 @@
                  Host::list(),
                  Port::integer(),
                  Database::integer() | undefined,
-                 Password::string() | binary() | undefined,
+                 Password::password() | undefined,
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined,
                  Options::list()
@@ -67,7 +67,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
                  Host::list(),
                  Port::integer(),
                  Database::integer() | binary() | undefined,
-                 Password::string(),
+                 Password::password(),
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined
                 ) -> {ok, Pid::pid()} | {error, Reason::term()}.
@@ -91,7 +91,8 @@ init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) 
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
-                   password = l2b(Password),
+                   %% cannot keep password wrapped, because otherwise troulbe after downgrade
+                   password = eredis_secret:unwrap(Password),
                    reconnect_sleep = ReconnectSleep,
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
@@ -223,9 +224,13 @@ handle_info(_Info, State) ->
 terminate(_Reason, State) ->
     close(State#state.socket).
 
-%% Down
 code_change(_, State, _) ->
     {ok, State}.
+
+format_status(_Opt, [_PDict, #state{} = State]) ->
+    [{data, [{"State", State#state{password = "******"}}]}];
+format_status(_Opt, [_PDict, State]) ->
+    [{data, [{"State", State}]}].
 
 close(_Transport, undefined) -> ok;
 close(Transport, Socket) ->
@@ -382,9 +387,13 @@ connect_with_tcp(State, Options) ->
                 {ok, Socket} ->
                     handle_connect(State, {ok, gen_tcp, Socket});
                 {error, Reason} ->
-                    handle_connect_error(error, Reason)
+                    connect_error(tcp_connect, State#state.host, State#state.port,
+                        #{addr => Addr, reason => Reason}
+                    )
             end;
-        {error, AddrReason} -> handle_connect_error(error, AddrReason)
+        {error, AddrReason} ->
+            connect_error(get_addr, State#state.host, State#state.port,
+                #{reason => AddrReason})
     end.
 
 connect_with_ssl(State, Options) ->
@@ -397,10 +406,13 @@ connect_with_ssl(State, Options) ->
                 {ok, SSLSocket} ->
                     handle_connect(State, {ok, ssl, SSLSocket});
                 {error, Reason} ->
-                    handle_connect_error(error, Reason)
+                    connect_error(ssl_connect, State#state.host, State#state.port,
+                        #{addr => Addr, reason => Reason}
+                    )
             end;
         {error, AddrReason} ->
-            handle_connect_error(error, AddrReason)
+            connect_error(get_addr, State#state.host, State#state.port,
+                #{reason => AddrReason})
     end.
 
 get_tcp_options(_State, Options) ->
@@ -411,7 +423,7 @@ get_tcp_options(_State, Options) ->
     end.
 
 handle_connect(State, {ok, Transport, Socket}) ->
-    case authenticate(Socket, State#state.password) of
+    case authenticate(Socket, get_password(State)) of
         ok ->
             case select_database(Socket, State#state.database) of
                 ok ->
@@ -419,15 +431,17 @@ handle_connect(State, {ok, Transport, Socket}) ->
                     {ok, State#state{socket = Socket}};
                 {error, Reason} ->
                     close(Transport, Socket),
-                    {error, {select_error, Reason}}
+                    connect_error(select_error, State#state.host, State#state.port,
+                        #{database => State#state.database, reason => Reason})
             end;
         {error, Reason} ->
             close(Transport, Socket),
-            handle_connect_error(error, {authentication_error, Reason})
+            connect_error(authentication_error, State#state.host, State#state.port,
+                #{reason => Reason})
     end.
 
-handle_connect_error(error, Reason) ->
-    {error, {connection_error, Reason}}.
+connect_error(Type, Host, Port, Details) ->
+    {error, Details#{type => Type, host => Host, port => Port}}.
 
 get_addr(Hostname) ->
     case inet:parse_address(Hostname) of
@@ -562,5 +576,8 @@ get_tranport() ->
         Transport -> Transport
     end.
 
-l2b(L) when is_list(L) -> list_to_binary(L);
+l2b(L) when is_list(L) -> iolist_to_binary(L);
 l2b(B) -> B.
+
+get_password(#state{password = Password}) ->
+    l2b(eredis_secret:unwrap(Password)).

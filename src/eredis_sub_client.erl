@@ -18,7 +18,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+         terminate/2, code_change/3, format_status/2]).
 
 %%
 %% API
@@ -26,7 +26,7 @@
 
 -spec start_link(Host::list(),
                  Port::integer(),
-                 Password::string(),
+                 Password::password(),
                  Database::integer(),
                  ReconnectSleep::reconnect_sleep(),
                  MaxQueueSize::integer() | infinity,
@@ -51,7 +51,8 @@ init([Host, Port, Password, Database, ReconnectSleep, MaxQueueSize, QueueBehavio
     end,
     State = #state{host            = Host,
                    port            = Port,
-                   password        = list_to_binary(Password),
+                   %% cannot keep password wrapped, because otherwise troulbe after downgrade
+                   password        = eredis_secret:unwrap(Password),
                    reconnect_sleep = ReconnectSleep,
                    channels        = [],
                    parser_state    = eredis_parser:init(),
@@ -233,8 +234,13 @@ terminate(_Reason, State) ->
     end,
     ok.
 
-code_change(_OldVsn, State, _Extra) ->
+code_change(_, State, _) ->
     {ok, State}.
+
+format_status(_Opt, [_PDict, #state{} = State]) ->
+    [{data, [{"State", State#state{password = "******"}}]}];
+format_status(_Opt, [_PDict, State]) ->
+    [{data, [{"State", State}]}].
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -334,7 +340,7 @@ connect1(State) ->
     case gen_tcp:connect(Addr, State#state.port,
                          [AFamily | ?SOCKET_OPTS], State#state.connect_timeout) of
         {ok, Socket} ->
-            case authenticate(Socket, State#state.password) of
+            case authenticate(Socket, get_password(State)) of
                 ok ->
                     case select_database(Socket, State#state.database) of
                         ok ->
@@ -439,3 +445,9 @@ read_database(undefined) ->
     undefined;
 read_database(Database) when is_integer(Database) ->
     list_to_binary(integer_to_list(Database)).
+
+l2b(L) when is_list(L) -> iolist_to_binary(L);
+l2b(B) -> B.
+
+get_password(#state{password = Password}) ->
+    l2b(eredis_secret:unwrap(Password)).

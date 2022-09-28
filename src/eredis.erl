@@ -53,7 +53,7 @@ start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Optio
   when is_list(Host),
        is_integer(Port),
        is_integer(Database) orelse Database == undefined,
-       is_list(Password) orelse is_binary(Password),
+       (is_list(Password) orelse is_binary(Password) orelse is_function(Password, 0)),
        is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect,
        is_integer(ConnectTimeout) ->
 
