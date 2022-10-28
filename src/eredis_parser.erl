@@ -92,7 +92,7 @@ parse(#pstate{state = undefined} = State, NewData) ->
         _ ->
             %% TODO: Handle the case where we start parsing a new
             %% response, but cannot make any sense of it
-            {error, unknown_response}
+            {error, {unknown_response, NewData}, State}
     end;
 %% The following clauses all match on different continuation states
 
@@ -253,7 +253,7 @@ parse_simple(Buffer) ->
             {continue, {incomplete_simple, Buffer}};
         NewlinePos ->
             <<Value:NewlinePos/binary, ?NL, Rest/binary>> = buffer_to_binary(Buffer),
-            {ok, Value, Rest}
+            {ok, Value, trim_nl(Rest)}
     end.
 
 parse_simple({incomplete_simple, Buffer}, NewData0) ->
@@ -310,3 +310,6 @@ return_error(Result, State, StateName) ->
         Res ->
             Res
     end.
+
+trim_nl(Bin) ->
+    string:trim(Bin, leading, [?NL]).
