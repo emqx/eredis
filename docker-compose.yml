@@ -1,0 +1,29 @@
+version: '3.9'
+
+services:
+  redis-server:
+    container_name: ${REDIS_TCP_HOST}
+    image: docker.io/library/redis:${REDIS_TAG}
+    ports:
+      - "${REDIS_TCP_PORT}:${REDIS_TCP_PORT}"
+    command:
+      - redis-server
+      - "--bind 0.0.0.0 ::"
+      - "--port ${REDIS_TCP_PORT}"
+
+  redis-server-tls:
+    container_name: ${REDIS_TLS_HOST}
+    image: docker.io/library/redis:${REDIS_TAG}
+    volumes:
+      - ./test/eredis_SUITE_data/certs/redis.crt:/etc/certs/redis.crt
+      - ./test/eredis_SUITE_data/certs/redis.key:/etc/certs/redis.key
+      - ./test/eredis_SUITE_data/certs/ca.crt:/etc/certs/ca.crt
+    ports:
+      - "${REDIS_TLS_PORT}:${REDIS_TLS_PORT}"
+    command:
+      - redis-server
+      - "--bind 0.0.0.0 ::"
+      - "--tls-port ${REDIS_TLS_PORT}"
+      - "--tls-cert-file /etc/certs/redis.crt"
+      - "--tls-key-file /etc/certs/redis.key"
+      - "--tls-ca-cert-file /etc/certs/ca.crt"

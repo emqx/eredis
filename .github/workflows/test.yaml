@@ -1,0 +1,31 @@
+name: Run test suites
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        otp:
+          - 24.3
+          - 25.1
+    steps:
+      - uses: actions/checkout@v3
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          rebar3-version: 3
+      - uses: isbang/compose-action@v1.4.1
+      - name: eunit
+        run: rebar3 eunit -v -c
+      - name: common test
+        run: rebar3 ct -v -c
+      - name: cover report
+        run: rebar3 cover -v
+      - uses: actions/upload-artifact@v3
+        with:
+          name: cover
+          path: _build/test/cover
