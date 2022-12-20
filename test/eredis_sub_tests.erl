@@ -179,6 +179,10 @@ dynamic_channels_test() ->
 
     ?assertEqual({ok, [<<"newchan">>]}, eredis_sub:channels(Sub)).
 
+censored_password_test() ->
+    Sub = s(),
+    ?assertMatch(#state{password = "******"}, get_state(Sub)).
+
 
 recv_all(Sub) ->
     recv_all(Sub, []).
