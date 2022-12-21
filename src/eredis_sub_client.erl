@@ -18,7 +18,7 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, format_status/2]).
+         terminate/2, code_change/3, format_status/1, format_status/2]).
 
 %%
 %% API
@@ -237,10 +237,14 @@ terminate(_Reason, State) ->
 code_change(_, State, _) ->
     {ok, State}.
 
-format_status(_Opt, [_PDict, #state{} = State]) ->
-    [{data, [{"State", State#state{password = "******"}}]}];
+format_status(Status = #{state := State}) ->
+    Status#{state => censor_state(State)}.
+
+%% TODO
+%% This is deprecated since OTP-25 in favor of `format_status/1`. Remove once
+%% OTP-25 becomes minimum supported OTP version.
 format_status(_Opt, [_PDict, State]) ->
-    [{data, [{"State", State}]}].
+    [{data, [{"State", censor_state(State)}]}].
 
 %%--------------------------------------------------------------------
 %%% Internal functions
@@ -451,3 +455,8 @@ l2b(B) -> B.
 
 get_password(#state{password = Password}) ->
     l2b(eredis_secret:unwrap(Password)).
+
+censor_state(#state{} = State) ->
+    State#state{password = "******"};
+censor_state(State) ->
+    State.
