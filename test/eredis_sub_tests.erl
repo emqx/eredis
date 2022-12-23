@@ -29,11 +29,6 @@ add_channels(Sub, Channels) ->
               end
       end, Channels).
 
-
-
-
-
-
 pubsub_test() ->
     Pub = c(),
     Sub = s(),
@@ -111,7 +106,6 @@ pubsub_connect_disconnect_messages_test() ->
     ?assertEqual({eredis_reconnect_attempt, Sub}, wait_for_msg(S)),
     ?assertEqual({eredis_connected, Sub}, wait_for_msg(S)),
     eredis_sub:stop(Sub).
-
 
 
 drop_queue_test() ->

@@ -305,8 +305,7 @@ handle_response(Data, #state{parser_state = ParserState,
         %% continuation data and we will try calling parse again when
         %% we have more data
         {continue, NewParserState} ->
-            State#state{parser_state = NewParserState};
-        _ -> ok
+            State#state{parser_state = NewParserState}
     end.
 
 %% @doc: Sends a value to the first client in queue. Returns the new

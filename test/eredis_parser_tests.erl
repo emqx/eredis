@@ -150,10 +150,7 @@ bulk_nil_with_extra_test() ->
 
 bulk_crap_test() ->
     B = <<"\r\n">>,
-    ?assertEqual({error, unknown_response}, parse(init(), B)).
-
-
-
+    ?assertEqual({error, {unknown_response, B}, init()}, parse(init(), B)).
 
 multibulk_test() ->
     %% [{1, 1}, {2, 2}, {3, 3}]
@@ -307,6 +304,10 @@ error_test() ->
     B = <<"-ERR wrong number of arguments for 'get' command\r\n">>,
     ?assertEqual({error, <<"ERR wrong number of arguments for 'get' command">>, init()},
                  parse(init(), B)).
+
+error_1_test() ->
+    B = <<"-MISCONF Redis is configured to save RDB snapshots, but it's currently unable to persist to disk. Commands that may modify the data set are disabled, because this instance is configured to report errors during writes if RDB snapshotting fails (stop-writes-on-bgsave-error option). Please check the Redis logs for details about the RDB error.\r\n\r\n">>,
+    ?assertEqual({error, string:trim(B, both, ["\r\n", $-]), init()}, parse(init(), B)).
 
 integer_test() ->
     B = <<":2\r\n">>,
