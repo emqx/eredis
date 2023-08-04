@@ -2,8 +2,15 @@
 
 -type reconnect_sleep() :: no_reconnect | integer().
 
+-type username() :: binary() | string().
 -type password() :: binary() | string() | function().
--type option() :: {host, string()} | {port, integer()} | {database, string()} | {password, password()} | {reconnect_sleep, reconnect_sleep()}.
+-type credentials() :: eredis:opaque_credentials().
+-type option() :: {host, string()}
+                | {port, integer()}
+                | {database, string()}
+                | {username, username()}
+                | {password, password()}
+                | {reconnect_sleep, reconnect_sleep()}.
 -type server_args() :: [option()].
 
 -type return_value() :: undefined | binary() | [binary() | nonempty_list()].

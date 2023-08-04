@@ -37,7 +37,7 @@
 -record(state, {
           host :: string() | undefined,
           port :: integer() | undefined,
-          password :: password() | undefined,
+          credentials :: credentials(),
           database :: binary() | undefined,
           sentinel :: undefined | atom(),
           reconnect_sleep :: reconnect_sleep() | undefined,
@@ -55,24 +55,24 @@
                  Host::list(),
                  Port::integer(),
                  Database::integer() | undefined,
-                 Password::password() | undefined,
+                 Credentials::credentials(),
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined,
                  Options::list()
                 ) -> {ok, Pid::pid()} | {error, Reason::term()}.
-start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options) ->
-    gen_server:start_link(?MODULE, [Host, Port, Database, Password,
+start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options) ->
+    gen_server:start_link(?MODULE, [Host, Port, Database, Credentials,
                                     ReconnectSleep, ConnectTimeout, Options], []).
 -spec start_link(
                  Host::list(),
                  Port::integer(),
                  Database::integer() | binary() | undefined,
-                 Password::password(),
+                 Credentials::credentials(),
                  ReconnectSleep::reconnect_sleep(),
                  ConnectTimeout::integer() | undefined
                 ) -> {ok, Pid::pid()} | {error, Reason::term()}.
-start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout) ->
-    gen_server:start_link(?MODULE, [Host, Port, Database, Password,
+start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout) ->
+    gen_server:start_link(?MODULE, [Host, Port, Database, Credentials,
                                     ReconnectSleep, ConnectTimeout, []], []).
 stop(Pid) ->
     gen_server:call(Pid, stop).
@@ -81,18 +81,21 @@ stop(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init([Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options]) ->
+init([Host, Port, Database, Credentials0, ReconnectSleep, ConnectTimeout, Options]) ->
     Sentinel = case Host of
         "sentinel:"++MasterStr -> list_to_atom(MasterStr);
          _ -> undefined
     end,
     erlang:put(options, Options),
     process_flag(trap_exit, true),
+    %% cannot keep password wrapped, because otherwise troulbe after downgrade
+    #{username := Username, password := Password0} = eredis:get_credentials_info(Credentials0),
+    Password = eredis_secret:unwrap(Password0),
+    Credentials = eredis:make_credentials(Username, Password),
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
-                   %% cannot keep password wrapped, because otherwise troulbe after downgrade
-                   password = eredis_secret:unwrap(Password),
+                   credentials = Credentials,
                    reconnect_sleep = ReconnectSleep,
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
@@ -427,7 +430,11 @@ get_tcp_options(_State, Options) ->
     end.
 
 handle_connect(State, {ok, Transport, Socket}) ->
-    case authenticate(Socket, get_password(State)) of
+    #{
+        username := Username,
+        password := Password
+    } = eredis:get_credentials_info(State#state.credentials),
+    case authenticate(Socket, maybe_l2b(Username), maybe_l2b(Password)) of
         ok ->
             case select_database(Socket, State#state.database) of
                 ok ->
@@ -469,10 +476,12 @@ select_database(_Socket, <<"0">>) ->
 select_database(Socket, Database) ->
     do_sync_command(Socket, ["SELECT", " ", Database, "\r\n"]).
 
-authenticate(_Socket, <<>>) ->
+authenticate(_Socket, _Username, <<>>) ->
     ok;
-authenticate(Socket, Password) ->
-    do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]).
+authenticate(Socket, undefined, Password) ->
+    do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]);
+authenticate(Socket, Username, Password) ->
+    do_sync_command(Socket, ["AUTH", " \"", Username, "\"", " \"", Password, "\"\r\n"]).
 
 %% @doc: Executes the given command synchronously, expects Redis to
 %% return "+OK\r\n", otherwise it will fail.
@@ -580,13 +589,11 @@ get_tranport() ->
         Transport -> Transport
     end.
 
-l2b(L) when is_list(L) -> iolist_to_binary(L);
-l2b(B) -> B.
+maybe_l2b(L) when is_list(L) -> iolist_to_binary(L);
+maybe_l2b(B) -> B.
 
-get_password(#state{password = Password}) ->
-    l2b(eredis_secret:unwrap(Password)).
-
-censor_state(#state{} = State) ->
-    State#state{password = "******"};
+censor_state(#state{credentials = Credentials0} = State) ->
+    Credentials = eredis:redact_credentials(Credentials0),
+    State#state{credentials = Credentials};
 censor_state(State) ->
     State.

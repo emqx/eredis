@@ -26,14 +26,14 @@
 
 -spec start_link(Host::list(),
                  Port::integer(),
-                 Password::password(),
+                 Credentials::credentials(),
                  Database::integer(),
                  ReconnectSleep::reconnect_sleep(),
                  MaxQueueSize::integer() | infinity,
                  QueueBehaviour::drop | exit) ->
                         {ok, Pid::pid()} | {error, Reason::term()}.
-start_link(Host, Port, Password, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour) ->
-    Args = [Host, Port, Password, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour],
+start_link(Host, Port, Credentials, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour) ->
+    Args = [Host, Port, Credentials, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour],
     gen_server:start_link(?MODULE, Args, []).
 
 
@@ -44,15 +44,18 @@ stop(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init([Host, Port, Password, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour]) ->
+init([Host, Port, Credentials0, Database, ReconnectSleep, MaxQueueSize, QueueBehaviour]) ->
     Sentinel = case Host of
         "sentinel:"++MasterStr -> list_to_atom(MasterStr);
          _ -> undefined
     end,
+    %% cannot keep password wrapped, because otherwise troulbe after downgrade
+    #{username := Username, password := Password0} = eredis:get_credentials_info(Credentials0),
+    Password = eredis_secret:unwrap(Password0),
+    Credentials = eredis:make_credentials(Username, Password),
     State = #state{host            = Host,
                    port            = Port,
-                   %% cannot keep password wrapped, because otherwise troulbe after downgrade
-                   password        = eredis_secret:unwrap(Password),
+                   credentials     = Credentials,
                    reconnect_sleep = ReconnectSleep,
                    channels        = [],
                    parser_state    = eredis_parser:init(),
@@ -344,7 +347,11 @@ connect1(State) ->
     case gen_tcp:connect(Addr, State#state.port,
                          [AFamily | ?SOCKET_OPTS], State#state.connect_timeout) of
         {ok, Socket} ->
-            case authenticate(Socket, get_password(State)) of
+            #{
+                username := Username,
+                password := Password
+            } = eredis:get_credentials_info(State#state.credentials),
+            case authenticate(Socket, maybe_l2b(Username), maybe_l2b(Password)) of
                 ok ->
                     case select_database(Socket, State#state.database) of
                         ok ->
@@ -359,11 +366,12 @@ connect1(State) ->
             {error, {connection_error, Reason}}
     end.
 
-authenticate(_Socket, <<>>) ->
+authenticate(_Socket, _Username, <<>>) ->
     ok;
-authenticate(Socket, Password) ->
-    eredis_client:do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]).
-
+authenticate(Socket, undefined, Password) ->
+    eredis_client:do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]);
+authenticate(Socket, Username, Password) ->
+    eredis_client:do_sync_command(Socket, ["AUTH", " \"", Username, "\"", " \"", Password, "\"\r\n"]).
 
 select_database(_Socket, undefined) ->
     ok;
@@ -450,13 +458,11 @@ read_database(undefined) ->
 read_database(Database) when is_integer(Database) ->
     list_to_binary(integer_to_list(Database)).
 
-l2b(L) when is_list(L) -> iolist_to_binary(L);
-l2b(B) -> B.
+maybe_l2b(L) when is_list(L) -> iolist_to_binary(L);
+maybe_l2b(B) -> B.
 
-get_password(#state{password = Password}) ->
-    l2b(eredis_secret:unwrap(Password)).
-
-censor_state(#state{} = State) ->
-    State#state{password = "******"};
+censor_state(#state{credentials = Credentials0} = State) ->
+    Credentials = eredis:redact_credentials(Credentials0),
+    State#state{credentials = Credentials};
 censor_state(State) ->
     State.

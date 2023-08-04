@@ -181,7 +181,8 @@ dynamic_channels_test() ->
 
 censored_password_test() ->
     Sub = s(),
-    ?assertMatch(#state{password = "******"}, get_state(Sub)).
+    #state{credentials = Credentials} = get_state(Sub),
+    ?assertMatch(#{password := "******"}, eredis:get_credentials_info(Credentials)).
 
 
 recv_all(Sub) ->

@@ -165,7 +165,7 @@ censored_password_test() ->
     {ok, Pid} = eredis:start_link("127.0.0.1", 6379, 0, _Password = ""),
     {status, Pid, _, [_, _, _, _, Misc]} = sys:get_status(Pid),
     [State] = [State || {data, [{"State", State} | _Rest]} <- Misc],
-    ?assertMatch([state, _Host, _Port, "******" | _], tuple_to_list(State)).
+    ?assertMatch([state, _Host, _Port, #{password := "******"} | _], tuple_to_list(State)).
 
 tcp_closed_test() ->
     C = c(),
