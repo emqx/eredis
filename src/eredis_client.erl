@@ -250,7 +250,7 @@ close(Socket) -> close(get_tranport(), Socket).
 %%% Internal functions
 %%--------------------------------------------------------------------
 
--spec do_request(Req::iolist(), From::pid(), #state{}) ->
+-spec do_request(Req::iolist(), From::pid() | undefined, #state{}) ->
                         {noreply, #state{}} | {reply, Reply::any(), #state{}}.
 %% @doc: Sends the given request to redis. If we do not have a
 %% connection, returns error.

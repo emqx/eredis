@@ -217,7 +217,7 @@ update_errors(E, #errors{sentinel_unreachable=SU, master_unknown=MUK, master_unr
         end,
     Errors1#errors{total = T + 1}.
 
-
+-dialyzer({no_match, [rotate/1]}).
 rotate([])     ->    [];
 rotate([X|Xs]) -> Xs ++ [X].
 
