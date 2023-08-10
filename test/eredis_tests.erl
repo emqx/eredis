@@ -3,177 +3,249 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("eredis.hrl").
 
+-define(AUTH_PASS_ONLY_PASSWORD, "public").
+-define(AUTH_USER_PASS_USERNAME, "test_user").
+-define(AUTH_USER_PASS_PASSWORD, "test_passwd").
+
 -import(eredis, [create_multibulk/1]).
 
-connect_test() ->
-    ?assertMatch({ok, _}, eredis:start_link("127.0.0.1", 6379)),
-    ?assertMatch({ok, _}, eredis:start_link("localhost", 6379)),
+maybe_credential(password_only) ->
+    ?AUTH_PASS_ONLY_PASSWORD;
+maybe_credential(username_password) ->
+    eredis:make_credentials(?AUTH_USER_PASS_USERNAME, ?AUTH_USER_PASS_PASSWORD).
 
-    case eredis:start_link("::1", 6379) of
-        {error, {connection_error, enetunreach}} ->
-            %% Travis-CI has no IPv6
-            ok;
-        Result ->
-            ?assertMatch({ok, _}, Result)
-    end.
+basic_test_() ->
+    [
+       basic_test_cases(password_only),
+       basic_test_cases(username_password)
+    ].
 
+basic_test_cases(AuthMethod) ->
+    AuthMethodSuffix =
+        case AuthMethod of
+            password_only -> " - password only";
+            username_password -> " - username/password"
+        end,
+    [
+        { "connect" ++ AuthMethodSuffix,
+            fun() ->
+                MaybeCredential = maybe_credential(AuthMethod),
+                ?assertMatch({ok, _}, eredis:start_link("127.0.0.1", 6379, 0, MaybeCredential)),
+                ?assertMatch({ok, _}, eredis:start_link("localhost", 6379, 0, MaybeCredential)),
+                case eredis:start_link("::1", 6379) of
+                    {error, {connection_error, enetunreach}} ->
+                        %% Travis-CI has no IPv6
+                        ok;
+                    Result ->
+                        ?assertMatch({ok, _}, Result)
+                end
+            end
+        },
 
-get_set_test() ->
-    C = c(),
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
+        { "auth" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                ?assertEqual(
+                    {ok, <<"OK">>},
+                    eredis:q(C, ["AUTH", ?AUTH_PASS_ONLY_PASSWORD])),
+                ?assertEqual(
+                    {ok, <<"OK">>},
+                    eredis:q(C, ["AUTH", ?AUTH_USER_PASS_USERNAME, ?AUTH_USER_PASS_PASSWORD])),
+                ?assertEqual(
+                    {error,<<"WRONGPASS invalid username-password pair or user is disabled.">>},
+                    eredis:q(C, ["AUTH", "wrong_password"])),
+                ?assertEqual(
+                    {error,<<"WRONGPASS invalid username-password pair or user is disabled.">>},
+                    eredis:q(C, ["AUTH", ?AUTH_USER_PASS_USERNAME, "wrong_password"]))
+            end
+        },
 
-    ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo])),
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
-    ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo])).
+        { "get/set" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
+                ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo])),
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
+                ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo]))
+            end
+        },
 
+        { "delete" ++ AuthMethodSuffix,
+            fun() ->
+            C = c(AuthMethod),
+            ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
+            ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
+            ?assertEqual({ok, <<"1">>}, eredis:q(C, ["DEL", foo])),
+            ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo]))
+        end
+        },
 
-delete_test() ->
-    C = c(),
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo])),
+        { "mset/mget" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                Keys = lists:seq(1, 1000),
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys])),
+                KeyValuePairs = [[K, K*2] || K <- Keys],
+                ExpectedResult = [list_to_binary(integer_to_list(K * 2)) || K <- Keys],
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["MSET" | lists:flatten(KeyValuePairs)])),
+                ?assertEqual({ok, ExpectedResult}, eredis:q(C, ["MGET" | Keys])),
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys]))
+            end
+        },
 
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
-    ?assertEqual({ok, <<"1">>}, eredis:q(C, ["DEL", foo])),
-    ?assertEqual({ok, undefined}, eredis:q(C, ["GET", foo])).
+        { "exec" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "b"])),
+                ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "a"])),
+                ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k2", "c"])),
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["MULTI"])),
+                ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C, ["LRANGE", "k1", "0", "-1"])),
+                ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C, ["LRANGE", "k2", "0", "-1"])),
 
-mset_mget_test() ->
-    C = c(),
-    Keys = lists:seq(1, 1000),
+                ExpectedResult = [[<<"a">>, <<"b">>], [<<"c">>]],
 
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys])),
+                ?assertEqual({ok, ExpectedResult}, eredis:q(C, ["EXEC"])),
 
-    KeyValuePairs = [[K, K*2] || K <- Keys],
-    ExpectedResult = [list_to_binary(integer_to_list(K * 2)) || K <- Keys],
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL", "k1", "k2"]))
+            end
+        },
 
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["MSET" | lists:flatten(KeyValuePairs)])),
-    ?assertEqual({ok, ExpectedResult}, eredis:q(C, ["MGET" | Keys])),
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL" | Keys])).
+        { "exec nil" ++ AuthMethodSuffix,
+            fun() ->
+                C1 = c(AuthMethod),
+                C2 = c(AuthMethod),
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C1, ["WATCH", "x"])),
+                ?assertMatch({ok, _}, eredis:q(C2, ["INCR", "x"])),
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C1, ["MULTI"])),
+                ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C1, ["GET", "x"])),
+                ?assertEqual({ok, undefined}, eredis:q(C1, ["EXEC"])),
+                ?assertMatch({ok, _}, eredis:q(C1, ["DEL", "x"]))
+            end
+        },
 
-exec_test() ->
-    C = c(),
+        { "pipeline" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                P1 = [["SET", a, "1"],
+                    ["LPUSH", b, "3"],
+                    ["LPUSH", b, "2"]],
+                ?assertEqual([{ok, <<"OK">>}, {ok, <<"1">>}, {ok, <<"2">>}],
+                            eredis:qp(C, P1)),
+                P2 = [["MULTI"],
+                    ["GET", a],
+                    ["LRANGE", b, "0", "-1"],
+                    ["EXEC"]],
+                ?assertEqual([{ok, <<"OK">>},
+                            {ok, <<"QUEUED">>},
+                            {ok, <<"QUEUED">>},
+                            {ok, [<<"1">>, [<<"2">>, <<"3">>]]}],
+                            eredis:qp(C, P2)),
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL", a, b]))
+            end
+        },
 
-    ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "b"])),
-    ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k1", "a"])),
-    ?assertMatch({ok, _}, eredis:q(C, ["LPUSH", "k2", "c"])),
+        { "pipeline mixed" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                P1 = [["LPUSH", c, "1"] || _ <- lists:seq(1, 100)],
+                P2 = [["LPUSH", d, "1"] || _ <- lists:seq(1, 100)],
+                Expect = [{ok, list_to_binary(integer_to_list(I))} || I <- lists:seq(1, 100)],
+                spawn(fun () ->
+                            erlang:yield(),
+                            ?assertEqual(Expect, eredis:qp(C, P1))
+                    end),
+                spawn(fun () ->
+                            ?assertEqual(Expect, eredis:qp(C, P2))
+                    end),
+                timer:sleep(10),
+                ?assertMatch({ok, _}, eredis:q(C, ["DEL", c, d]))
+            end
+        },
 
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["MULTI"])),
-    ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C, ["LRANGE", "k1", "0", "-1"])),
-    ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C, ["LRANGE", "k2", "0", "-1"])),
+        { "noreply" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                ?assertEqual(ok, eredis:q_noreply(C, ["GET", foo])),
+                ?assertEqual(ok, eredis:q_noreply(C, ["SET", foo, bar])),
+                %% Even though q_noreply doesn't wait, it is sent before subsequent requests:
+                ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo]))
+            end
+        },
 
-    ExpectedResult = [[<<"a">>, <<"b">>], [<<"c">>]],
+        { "async" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
+                ?assertEqual(ok, eredis:q_async(C, ["GET", foo], self())),
+                receive
+                    {response, Msg} ->
+                        ?assertEqual(Msg, {ok, <<"bar">>}),
+                        ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo]))
+                end
+            end
+        },
 
-    ?assertEqual({ok, ExpectedResult}, eredis:q(C, ["EXEC"])),
+        { "undefined database" ++ AuthMethodSuffix,
+            fun() ->
+                MaybeCredential = maybe_credential(AuthMethod),
+                ?assertMatch(
+                    {ok,_},
+                    eredis:start_link("localhost", 6379, undefined, MaybeCredential))
+            end
+        },
 
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL", "k1", "k2"])).
+        { "censored password" ++ AuthMethodSuffix,
+            fun() ->
+                MaybeCredential = maybe_credential(AuthMethod),
+                {ok, Pid} = eredis:start_link("127.0.0.1", 6379, 0, MaybeCredential),
+                {status, Pid, _, [_, _, _, _, Misc]} = sys:get_status(Pid),
+                [State] = [State || {data, [{"State", State} | _Rest]} <- Misc],
+                ?assertMatch(
+                    [state, _Host, _Port, #{password := "******"} | _],
+                    tuple_to_list(State))
+            end
+        },
 
-exec_nil_test() ->
-    C1 = c(),
-    C2 = c(),
+        { "tcp closed" ++ AuthMethodSuffix,
+            fun() ->
+                C = c(AuthMethod),
+                tcp_closed_rig(C)
+            end
+        },
 
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C1, ["WATCH", "x"])),
-    ?assertMatch({ok, _}, eredis:q(C2, ["INCR", "x"])),
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C1, ["MULTI"])),
-    ?assertEqual({ok, <<"QUEUED">>}, eredis:q(C1, ["GET", "x"])),
-    ?assertEqual({ok, undefined}, eredis:q(C1, ["EXEC"])),
-    ?assertMatch({ok, _}, eredis:q(C1, ["DEL", "x"])).
-
-pipeline_test() ->
-    C = c(),
-
-    P1 = [["SET", a, "1"],
-          ["LPUSH", b, "3"],
-          ["LPUSH", b, "2"]],
-
-    ?assertEqual([{ok, <<"OK">>}, {ok, <<"1">>}, {ok, <<"2">>}],
-                 eredis:qp(C, P1)),
-
-    P2 = [["MULTI"],
-          ["GET", a],
-          ["LRANGE", b, "0", "-1"],
-          ["EXEC"]],
-
-    ?assertEqual([{ok, <<"OK">>},
-                  {ok, <<"QUEUED">>},
-                  {ok, <<"QUEUED">>},
-                  {ok, [<<"1">>, [<<"2">>, <<"3">>]]}],
-                 eredis:qp(C, P2)),
-
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL", a, b])).
-
-pipeline_mixed_test() ->
-    C = c(),
-    P1 = [["LPUSH", c, "1"] || _ <- lists:seq(1, 100)],
-    P2 = [["LPUSH", d, "1"] || _ <- lists:seq(1, 100)],
-    Expect = [{ok, list_to_binary(integer_to_list(I))} || I <- lists:seq(1, 100)],
-    spawn(fun () ->
-                  erlang:yield(),
-                  ?assertEqual(Expect, eredis:qp(C, P1))
-          end),
-    spawn(fun () ->
-                  ?assertEqual(Expect, eredis:qp(C, P2))
-          end),
-    timer:sleep(10),
-    ?assertMatch({ok, _}, eredis:q(C, ["DEL", c, d])).
-
-q_noreply_test() ->
-    C = c(),
-    ?assertEqual(ok, eredis:q_noreply(C, ["GET", foo])),
-    ?assertEqual(ok, eredis:q_noreply(C, ["SET", foo, bar])),
-    %% Even though q_noreply doesn't wait, it is sent before subsequent requests:
-    ?assertEqual({ok, <<"bar">>}, eredis:q(C, ["GET", foo])).
-
-q_async_test() ->
-    C = c(),
-    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["SET", foo, bar])),
-    ?assertEqual(ok, eredis:q_async(C, ["GET", foo], self())),
-    receive
-        {response, Msg} ->
-            ?assertEqual(Msg, {ok, <<"bar">>}),
-            ?assertMatch({ok, _}, eredis:q(C, ["DEL", foo]))
-    end.
-
-c() ->
-    Res = eredis:start_link(),
-    ?assertMatch({ok, _}, Res),
-    {ok, C} = Res,
-    C.
-
-
-
-c_no_reconnect() ->
-    Res = eredis:start_link("127.0.0.1", 6379, 0, "", no_reconnect),
-    ?assertMatch({ok, _}, Res),
-    {ok, C} = Res,
-    C.
+        { "tcp closed - no reconnect" ++ AuthMethodSuffix,
+            fun() ->
+                C = c_no_reconnect(AuthMethod),
+                tcp_closed_rig(C)
+            end
+        }
+    ].
 
 multibulk_test_() ->
     [?_assertEqual(<<"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n">>,
-                   list_to_binary(create_multibulk(["SET", "foo", "bar"]))),
-     ?_assertEqual(<<"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n">>,
-                   list_to_binary(create_multibulk(['SET', foo, bar]))),
+                    list_to_binary(create_multibulk(["SET", "foo", "bar"]))),
+        ?_assertEqual(<<"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\nbar\r\n">>,
+                    list_to_binary(create_multibulk(['SET', foo, bar]))),
 
-     ?_assertEqual(<<"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\n123\r\n">>,
-                   list_to_binary(create_multibulk(['SET', foo, 123]))),
+        ?_assertEqual(<<"*3\r\n$3\r\nSET\r\n$3\r\nfoo\r\n$3\r\n123\r\n">>,
+                    list_to_binary(create_multibulk(['SET', foo, 123]))),
 
-     ?_assertThrow({cannot_store_floats, 123.5},
-                   list_to_binary(create_multibulk(['SET', foo, 123.5])))
+        ?_assertThrow({cannot_store_floats, 123.5},
+                    list_to_binary(create_multibulk(['SET', foo, 123.5])))
     ].
 
-undefined_database_test() ->
-    ?assertMatch({ok,_}, eredis:start_link("localhost", 6379, undefined)).
+c(AuthMethod) ->
+    Res = eredis:start_link("127.0.0.1", 6379, 0, maybe_credential(AuthMethod)),
+    ?assertMatch({ok, _}, Res),
+    {ok, C} = Res,
+    C.
 
-censored_password_test() ->
-    {ok, Pid} = eredis:start_link("127.0.0.1", 6379, 0, _Password = ""),
-    {status, Pid, _, [_, _, _, _, Misc]} = sys:get_status(Pid),
-    [State] = [State || {data, [{"State", State} | _Rest]} <- Misc],
-    ?assertMatch([state, _Host, _Port, #{password := "******"} | _], tuple_to_list(State)).
-
-tcp_closed_test() ->
-    C = c(),
-    tcp_closed_rig(C).
-
-tcp_closed_no_reconnect_test() ->
-    C = c_no_reconnect(),
-    tcp_closed_rig(C).
+c_no_reconnect(AuthMethod) ->
+    Res = eredis:start_link("127.0.0.1", 6379, 0, maybe_credential(AuthMethod), no_reconnect),
+    ?assertMatch({ok, _}, Res),
+    {ok, C} = Res,
+    C.
 
 tcp_closed_rig(C) ->
     %% fire async requests to add to redis client queue and then trick
@@ -214,3 +286,4 @@ gather_remote_queries([Pid | Rest], Acc) ->
         10000 ->
             error({gather_remote_queries, timeout})
     end.
+
