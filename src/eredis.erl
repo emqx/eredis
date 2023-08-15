@@ -156,7 +156,8 @@ make_credentials(Username, Password) when
 ->
     #{
         username => Username,
-        password => Password
+        % eredis_secret handles nested funs.
+        password => eredis_secret:wrap(Password)
     }.
 
 -spec get_credentials_info(credentials()) -> #{
@@ -166,7 +167,7 @@ make_credentials(Username, Password) when
 get_credentials_info(#{username := Username, password := Password}) ->
     #{
         username => Username,
-        password => Password
+        password => eredis_secret:unwrap(Password)
     }.
 
 -spec redact_credentials(credentials()) -> credentials().
@@ -179,7 +180,7 @@ redact_credentials(Credentials) ->
 make_empty_credentials() ->
     #{
         username => undefined,
-        password => ""
+        password => eredis_secret:wrap("")
     }.
 
 %%

@@ -81,17 +81,13 @@ stop(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init([Host, Port, Database, Credentials0, ReconnectSleep, ConnectTimeout, Options]) ->
+init([Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options]) ->
     Sentinel = case Host of
         "sentinel:"++MasterStr -> list_to_atom(MasterStr);
          _ -> undefined
     end,
     erlang:put(options, Options),
     process_flag(trap_exit, true),
-    %% cannot keep password wrapped, because otherwise troulbe after downgrade
-    #{username := Username, password := Password0} = eredis:get_credentials_info(Credentials0),
-    Password = eredis_secret:unwrap(Password0),
-    Credentials = eredis:make_credentials(Username, Password),
     State = #state{host = Host,
                    port = Port,
                    database = read_database(Database),
