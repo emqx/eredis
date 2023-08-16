@@ -1,17 +1,28 @@
-%% @author: 
-%% @description: 
+%% @author:
+%% @description:
 -module(eredis_SUITE).
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("common_test/include/ct.hrl").
 -include("eredis.hrl").
 
 -compile([export_all, nowarn_export_all]).
+
+-define(AUTH_PASS_ONLY_PASSWORD, "public").
+-define(AUTH_USER_PASS_USERNAME, "test_user").
+-define(AUTH_USER_PASS_PASSWORD, "test_passwd").
+
 %%--------------------------------------------------------------------
 %% Setups
 %%--------------------------------------------------------------------
 all() ->
-    [{group, ssl}, {group, tcp}].
+    [
+        {group, tcp},
+        {group, ssl}
+    ].
+
 groups() ->
-    Cases = [get_set_test,
+    Cases = [auth_test,
+             get_set_test,
              delete_test,
              mset_mget_test,
              exec_test,
@@ -21,49 +32,75 @@ groups() ->
              q_noreply_test,
              q_async_test,
              socket_closed_test],
-    [{ssl, Cases}, {tcp, Cases}].
+    AuthGroups = [{group, username_password}, {group, password_only}],
+    [
+        {ssl, AuthGroups},
+        {tcp, AuthGroups},
+        {username_password, Cases},
+        {password_only, Cases}
+    ].
 init_per_suite(_Cfg) ->
     _Cfg.
 
 end_per_suite(_) ->
     ok.
 
-init_per_group(Group , Cfg) ->
-    [{t, Group}| Cfg].
+init_per_group(Group , Cfg) when Group =:= tcp; Group =:= ssl ->
+    [{t, Group}| Cfg];
+init_per_group(Group , Cfg) when Group =:= password_only; Group =:= username_password ->
+    [{auth_type, Group}| Cfg];
+init_per_group(_Group , Cfg) ->
+    Cfg.
 
 end_per_group(_Group, _Cfg) ->
     ok.
 %%--------------------------------------------------------------------
 
-connect_ssl(DataDir) ->
+maybe_credential(password_only) ->
+    ?AUTH_PASS_ONLY_PASSWORD;
+maybe_credential(username_password) ->
+    eredis:make_credentials(?AUTH_USER_PASS_USERNAME, ?AUTH_USER_PASS_PASSWORD).
+
+connect_ssl(Authtype, DataDir) ->
     Options = [{ssl_options, [{cacertfile, DataDir ++ "certs/ca.crt"},
                               {certfile, DataDir ++ "certs/redis.crt"},
                               {keyfile, DataDir ++ "certs/redis.key"}]},
                               %% {verify, verify_peer}]},
                {tcp_options ,[]}],
-    {ok, SSLClient} = eredis:start_link("127.0.0.1", 6378, 0, "", 3000, 5000, Options),
+    MaybeCredentials = maybe_credential(Authtype),
+    {ok, SSLClient} =
+        eredis:start_link("127.0.0.1", 6378, 0, MaybeCredentials, 3000, 5000, Options),
     SSLClient.
 
-connect_tcp() ->
-    {ok, TcpClient} = eredis:start_link("127.0.0.1", 6379),
+connect_tcp(Authtype) ->
+    MaybeCredentials = maybe_credential(Authtype),
+    {ok, TcpClient} = eredis:start_link("127.0.0.1", 6379, 0, MaybeCredentials),
     TcpClient.
 
 c(Config) ->
-    {t, T} = lists:keyfind(t, 1, Config),
-    case T of
+    AuthType = ?config(auth_type, Config),
+    case ?config(t, Config) of
         ssl ->
-            {data_dir, DataDir} = lists:keyfind(data_dir, 1, Config),
-            C = connect_ssl(DataDir),
+            DataDir = ?config(data_dir, Config),
+            C = connect_ssl(AuthType, DataDir),
             eredis:q(C, ["flushdb"]),
             C;
         _ ->
-            C = connect_tcp(),
+            C = connect_tcp(AuthType),
             eredis:q(C, ["flushdb"]),
             C
     end.
 
-connect_with_password(_) ->
-    {ok, _} = eredis:start_link("127.0.0.1", 637, 0, "password", 3000, 5000, []).
+auth_test(Config) ->
+    C = c(Config),
+    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["AUTH", ?AUTH_PASS_ONLY_PASSWORD])),
+    ?assertEqual({ok, <<"OK">>}, eredis:q(C, ["AUTH", ?AUTH_USER_PASS_USERNAME, ?AUTH_USER_PASS_PASSWORD])),
+    ?assertEqual(
+        {error,<<"WRONGPASS invalid username-password pair or user is disabled.">>},
+        eredis:q(C, ["AUTH", "wrong_password"])),
+    ?assertEqual(
+        {error,<<"WRONGPASS invalid username-password pair or user is disabled.">>},
+        eredis:q(C, ["AUTH", ?AUTH_USER_PASS_USERNAME, "wrong_password"])).
 
 get_set_test(Config) ->
     C = c(Config),

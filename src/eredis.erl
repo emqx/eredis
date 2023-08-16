@@ -27,6 +27,17 @@
                   {global,term()} |
                   {via,atom(),term()}.
 
+%% credentials api
+-export([get_credentials_info/1,
+         make_credentials/1, make_credentials/2,
+         redact_credentials/1, make_empty_credentials/0]).
+
+-opaque opaque_credentials() :: #{
+    username => username(),
+    password := password()
+}.
+-export_type([opaque_credentials/0]).
+
 %%
 %% PUBLIC API
 %%
@@ -40,36 +51,45 @@ start_link(Host, Port) ->
 start_link(Host, Port, Database) ->
     start_link(Host, Port, Database, "").
 
-start_link(Host, Port, Database, Password) ->
-    start_link(Host, Port, Database, Password, 100).
+start_link(Host, Port, Database, MaybeCredentials) ->
+    Credentials = make_credentials(MaybeCredentials),
+    start_link(Host, Port, Database, Credentials, 100).
 
-start_link(Host, Port, Database, Password, ReconnectSleep) ->
-    start_link(Host, Port, Database, Password, ReconnectSleep, ?TIMEOUT).
+start_link(Host, Port, Database, MaybeCredentials, ReconnectSleep) ->
+    Credentials = make_credentials(MaybeCredentials),
+    start_link(Host, Port, Database, Credentials, ReconnectSleep, ?TIMEOUT).
 
-start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout) ->
-    start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, []).
+start_link(Host, Port, Database, MaybeCredentials, ReconnectSleep, ConnectTimeout) ->
+    Credentials = make_credentials(MaybeCredentials),
+    start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, []).
 
-start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options)
+start_link(Host, Port, Database, MaybeCredentials, ReconnectSleep, ConnectTimeout, Options)
   when is_list(Host),
        is_integer(Port),
        is_integer(Database) orelse Database == undefined,
-       (is_list(Password) orelse is_binary(Password) orelse is_function(Password, 0)),
+       (is_map(MaybeCredentials) orelse
+          % checks for MaybeCredentials being the Password only
+          is_list(MaybeCredentials) orelse
+          is_binary(MaybeCredentials) orelse
+          is_function(MaybeCredentials, 0)),
        is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect,
        is_integer(ConnectTimeout) ->
-
-    eredis_client:start_link(Host, Port, Database, Password,
+    Credentials = make_credentials(MaybeCredentials),
+    eredis_client:start_link(Host, Port, Database, Credentials,
                              ReconnectSleep, ConnectTimeout, Options).
 
 %% @doc: Callback for starting from poolboy
 -spec start_link(server_args()) -> {ok, Pid::pid()} | {error, Reason::term()}.
 start_link(Args) ->
     Database       = proplists:get_value(database, Args, 0),
+    Username       = proplists:get_value(username, Args, undefined),
     Password       = proplists:get_value(password, Args, ""),
     ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
     ConnectTimeout = proplists:get_value(connect_timeout, Args, ?TIMEOUT),
     Options = proplists:get_value(options, Args, []),
     {Host, Port} = maybe_start_sentinel(Args),
-    start_link(Host, Port, Database, Password, ReconnectSleep, ConnectTimeout, Options).
+    Credentials = make_credentials(Username, Password),
+    start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options).
 
 stop(Client) ->
     eredis_client:stop(Client).
@@ -117,6 +137,51 @@ q_async(Client, Command) ->
 q_async(Client, Command, Pid) when is_pid(Pid) ->
     Request = {request, create_multibulk(Command), Pid},
     gen_server:cast(Client, Request).
+
+%%--------------------------------------------------------------------
+%%% CREDENTIALS API
+%%--------------------------------------------------------------------
+
+-spec make_credentials(password() | credentials()) -> credentials().
+make_credentials(#{password := Password} = Credentials) ->
+    Username = maps:get(username, Credentials, undefined),
+    make_credentials(Username, Password);
+make_credentials(Password) ->
+    make_credentials(undefined, Password).
+
+-spec make_credentials(username() | undefined, password()) -> credentials().
+make_credentials(Username, Password) when
+    (Username =:= undefined orelse is_list(Username) orelse is_binary(Username)) andalso
+    (is_list(Password) orelse is_binary(Password) orelse is_function(Password, 0))
+->
+    #{
+        username => Username,
+        % eredis_secret handles nested funs.
+        password => eredis_secret:wrap(Password)
+    }.
+
+-spec get_credentials_info(credentials()) -> #{
+        username := username() | undefined,
+        password := password()
+    }.
+get_credentials_info(#{username := Username, password := Password}) ->
+    #{
+        username => Username,
+        password => eredis_secret:unwrap(Password)
+    }.
+
+-spec redact_credentials(credentials()) -> credentials().
+redact_credentials(Credentials) ->
+    Credentials#{
+        password => "******"
+    }.
+
+-spec make_empty_credentials() -> credentials().
+make_empty_credentials() ->
+    #{
+        username => undefined,
+        password => eredis_secret:wrap("")
+    }.
 
 %%
 %% INTERNAL HELPERS

@@ -43,6 +43,7 @@ init() ->
                        {ok, return_value(), Rest::binary(), NewState::#pstate{}} |
                        {error, ErrString::binary(), NewState::#pstate{}} |
                        {error, ErrString::binary(), Rest::binary(), NewState::#pstate{}} |
+                       {error, unknown_response} |
                        {continue, NewState::#pstate{}}.
 
 %% @doc: Parses the (possibly partial) response from Redis. Returns

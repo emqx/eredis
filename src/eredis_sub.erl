@@ -25,19 +25,23 @@
 start_link() ->
     start_link([]).
 
-start_link(Host, Port, Password, Database) ->
-    start_link(Host, Port, Password, Database, 100, infinity, drop).
+start_link(Host, Port, MaybeCredentials, Database) ->
+    start_link(Host, Port, MaybeCredentials, Database, 100, infinity, drop).
 
-start_link(Host, Port, Password, Database, ReconnectSleep,
+start_link(Host, Port, MaybeCredentials, Database, ReconnectSleep,
            MaxQueueSize, QueueBehaviour)
   when is_list(Host) andalso
        is_integer(Port) andalso
-       is_list(Password) andalso
+       (is_map(MaybeCredentials) orelse
+           % checks for MaybeCredentials being the Password only
+           is_list(MaybeCredentials) orelse
+           is_binary(MaybeCredentials) orelse
+           is_function(MaybeCredentials, 0)) andalso
        (is_integer(ReconnectSleep) orelse ReconnectSleep =:= no_reconnect) andalso
        (is_integer(MaxQueueSize) orelse MaxQueueSize =:= infinity) andalso
        (QueueBehaviour =:= drop orelse QueueBehaviour =:= exit) ->
-
-    eredis_sub_client:start_link(Host, Port, Password, Database, ReconnectSleep,
+    Credentials = eredis:make_credentials(MaybeCredentials),
+    eredis_sub_client:start_link(Host, Port, Credentials, Database, ReconnectSleep,
                                  MaxQueueSize, QueueBehaviour).
 
 
@@ -46,12 +50,14 @@ start_link(Host, Port, Password, Database, ReconnectSleep,
 start_link(Args) ->
     Host           = proplists:get_value(host, Args, "127.0.0.1"),
     Port           = proplists:get_value(port, Args, 6379),
+    Username       = proplists:get_value(username, Args, undefined),
     Password       = proplists:get_value(password, Args, ""),
     ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
     MaxQueueSize   = proplists:get_value(max_queue_size, Args, infinity),
     QueueBehaviour = proplists:get_value(queue_behaviour, Args, drop),
     Database = proplists:get_value(database, Args, 0),
-    start_link(Host, Port, Password, Database, ReconnectSleep,
+    Credentials = eredis:make_credentials(Username, Password),
+    start_link(Host, Port, Credentials, Database, ReconnectSleep,
                MaxQueueSize, QueueBehaviour).
 
 stop(Pid) ->
