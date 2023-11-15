@@ -365,16 +365,16 @@ connect1(State) ->
 authenticate(_Socket, _Username, <<>>) ->
     ok;
 authenticate(Socket, undefined, Password) ->
-    eredis_client:do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]);
+    eredis_client:do_sync_command(Socket, eredis:create_multibulk(["AUTH", Password]));
 authenticate(Socket, Username, Password) ->
-    eredis_client:do_sync_command(Socket, ["AUTH", " \"", Username, "\"", " \"", Password, "\"\r\n"]).
+    eredis_client:do_sync_command(Socket, eredis:create_multibulk(["AUTH", Username, Password])).
 
 select_database(_Socket, undefined) ->
     ok;
 select_database(_Socket, <<"0">>) ->
     ok;
 select_database(Socket, Database) ->
-    eredis_client:do_sync_command(Socket, ["SELECT", " ", Database, "\r\n"]).
+    eredis_client:do_sync_command(Socket, eredis:create_multibulk(["SELECT", Database])).
 
 %% @doc: Loop until a connection can be established, this includes
 %% successfully issuing the auth and select calls. When we have a
