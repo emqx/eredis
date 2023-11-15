@@ -470,14 +470,14 @@ select_database(_Socket, undefined) ->
 select_database(_Socket, <<"0">>) ->
     ok;
 select_database(Socket, Database) ->
-    do_sync_command(Socket, ["SELECT", " ", Database, "\r\n"]).
+    do_sync_command(Socket, eredis:create_multibulk(["SELECT", Database])).
 
 authenticate(_Socket, _Username, <<>>) ->
     ok;
 authenticate(Socket, undefined, Password) ->
-    do_sync_command(Socket, ["AUTH", " \"", Password, "\"\r\n"]);
+    do_sync_command(Socket, eredis:create_multibulk(["AUTH", Password]));
 authenticate(Socket, Username, Password) ->
-    do_sync_command(Socket, ["AUTH", " \"", Username, "\"", " \"", Password, "\"\r\n"]).
+    do_sync_command(Socket, eredis:create_multibulk(["AUTH", Username, Password])).
 
 %% @doc: Executes the given command synchronously, expects Redis to
 %% return "+OK\r\n", otherwise it will fail.
