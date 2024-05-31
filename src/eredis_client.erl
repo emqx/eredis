@@ -117,7 +117,7 @@ handle_call(stop, _From, State) ->
 handle_call({send, Command}, _From, #state{socket = Socket} = State) ->
     Transport = get_tranport(),
     ok = Transport:setopts(Socket, [{active, false}]),
-    case Transport:send(Socket, Command) of
+    case send_data(Transport, Socket, Command) of
         ok ->
             %% Hope there's nothing else coming down on the socket..
             case Transport:recv(Socket, 0, ?RECV_TIMEOUT) of
@@ -593,3 +593,20 @@ censor_state(#state{credentials = Credentials0} = State) ->
     State#state{credentials = Credentials};
 censor_state(State) ->
     State.
+
+send_data(gen_tcp, Sock, Data) ->
+    send_tcp_data(Sock, Data);
+send_data(Transport, Sock, Data) ->
+    Transport:send(Sock, Data).
+
+-if(?OTP_RELEASE >= 26).
+send_tcp_data(Sock, Data) ->
+    gen_tcp:send(Sock, Data).
+-else.
+send_tcp_data(Sock, Data) ->
+    try erlang:port_command(Sock, Data) of
+        true -> ok
+    catch
+        error:badarg -> {error, einval}
+    end.
+-endif.
