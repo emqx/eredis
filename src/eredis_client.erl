@@ -163,7 +163,10 @@ handle_cast(_Msg, State) ->
 handle_info({tcp, Socket, Bs}, #state{socket = Socket} = State) ->
     ok = inet:setopts(Socket, [{active, once}]),
     {noreply, handle_response(Bs, State)};
-
+handle_info({inet_reply, Socket, ok}, #state{socket = Socket} = State) ->
+    {noreply, State};
+handle_info({inet_reply, Socket, {error, Reason}}, #state{socket = Socket} = State) ->
+    {stop, {async_send_error, Reason}, State};
 handle_info({tcp, Socket, _}, #state{socket = OurSocket} = State)
   when OurSocket =/= Socket ->
     %% Ignore tcp messages when the socket in message doesn't match
@@ -255,7 +258,7 @@ do_request(_Req, _From, #state{socket = undefined} = State) ->
 
 do_request(Req, From, State) ->
     Transport = get_tranport(),
-    case Transport:send(State#state.socket, Req) of
+    case send_data(Transport, State#state.socket, Req) of
         ok ->
             NewQueue = queue:in({1, From}, State#state.queue),
             {noreply, State#state{queue = NewQueue}};
@@ -272,7 +275,7 @@ do_pipeline(_Pipeline, _From, #state{socket = undefined} = State) ->
 
 do_pipeline(Pipeline, From, State) ->
     Transport = get_tranport(),
-    case Transport:send(State#state.socket, Pipeline) of
+    case send_data(Transport, State#state.socket, Pipeline) of
         ok ->
             NewQueue = queue:in({length(Pipeline), From, []}, State#state.queue),
             {noreply, State#state{queue = NewQueue}};
@@ -490,7 +493,7 @@ set_transport_opts(Socket, Opts) ->
 
 do_sync_command(Socket, Command) ->
     Transport = set_transport_opts(Socket, [{active, false}]),
-    case Transport:send(Socket, Command) of
+    case send_data(Transport, Socket, Command) of
         ok ->
             %% Hope there's nothing else coming down on the socket..
             case Transport:recv(Socket, 0, ?RECV_TIMEOUT) of
