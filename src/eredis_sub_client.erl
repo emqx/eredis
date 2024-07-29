@@ -223,6 +223,14 @@ handle_info({'DOWN', Ref, process, Pid, _Reason},
 handle_info(stop, State) ->
     {stop, shutdown, State};
 
+handle_info({inet_reply, Socket, ok}, #state{socket = Socket} = State) ->
+    {noreply, State};
+handle_info({inet_reply, Socket, {error, Reason}}, #state{socket = Socket} = State) ->
+    {stop, {async_send_error, Reason}, State};
+handle_info({inet_reply, _, _} = Msg, State) ->
+    logger:warning("Unexpected inet_reply message: ~p, socket: ~p~n", [Msg, State#state.socket]),
+    {noreply, State};
+
 handle_info(_Info, State) ->
     {stop, {unhandled_message, _Info}, State}.
 

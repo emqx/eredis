@@ -167,6 +167,9 @@ handle_info({inet_reply, Socket, ok}, #state{socket = Socket} = State) ->
     {noreply, State};
 handle_info({inet_reply, Socket, {error, Reason}}, #state{socket = Socket} = State) ->
     {stop, {async_send_error, Reason}, State};
+handle_info({inet_reply, _, _} = Msg, State) ->
+    logger:warning("Unexpected inet_reply message: ~p, socket: ~p~n", [Msg, State#state.socket]),
+    {noreply, State};
 handle_info({tcp, Socket, _}, #state{socket = OurSocket} = State)
   when OurSocket =/= Socket ->
     %% Ignore tcp messages when the socket in message doesn't match

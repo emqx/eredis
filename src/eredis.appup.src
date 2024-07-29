@@ -1,5 +1,5 @@
 %% -*- mode: erlang -*-
-{"1.2.13",
+{"1.2.15",
   [
     {"1.1.0", [
       {add_module, eredis_secret},
@@ -74,12 +74,9 @@
       {load_module, eredis, brutal_purge, soft_purge, [eredis_client]},
       {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
-    {"1.2.11", [
+    {<<"1.2.1[1-4]">>, [
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
-    ]},
-    {"1.2.12", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ],
   % {delete_module, eredis_secret}, %% this is intended to be missing in downgrade instructions,
@@ -151,12 +148,9 @@
       {load_module, eredis, brutal_purge, soft_purge, [eredis_client]},
       {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
     ]},
-    {"1.2.11", [
+    {<<"1.2.1[1-4]">>, [
       {load_module, eredis_client, brutal_purge, soft_purge, []},
       {load_module, eredis_sub_client, brutal_purge, soft_purge, []}
-    ]},
-    {"1.2.12", [
-      {load_module, eredis_client, brutal_purge, soft_purge, []}
     ]}
   ]
 }.
