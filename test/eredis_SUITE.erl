@@ -64,8 +64,9 @@ maybe_credential(username_password) ->
 connect_ssl(Authtype, DataDir) ->
     Options = [{ssl_options, [{cacertfile, DataDir ++ "certs/ca.crt"},
                               {certfile, DataDir ++ "certs/redis.crt"},
-                              {keyfile, DataDir ++ "certs/redis.key"}]},
-                              %% {verify, verify_peer}]},
+                              {keyfile, DataDir ++ "certs/redis.key"},
+                              %% Hostname check is enabled by default in Erlang/OTP 26.
+                              {verify, verify_none}]},
                {tcp_options ,[]}],
     MaybeCredentials = maybe_credential(Authtype),
     {ok, SSLClient} =
