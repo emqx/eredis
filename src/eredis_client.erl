@@ -30,7 +30,11 @@
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3, format_status/1, format_status/2]).
+         terminate/2, code_change/3, format_status/1]).
+
+-if(?OTP_RELEASE < 25).
+-export([format_status/2]).
+-endif.
 
 -export([reconnect_loop/3]).
 
@@ -238,8 +242,10 @@ format_status(Status = #{state := State}) ->
 %% TODO
 %% This is deprecated since OTP-25 in favor of `format_status/1`. Remove once
 %% OTP-25 becomes minimum supported OTP version.
+-if(?OTP_RELEASE < 25).
 format_status(_Opt, [_PDict, State]) ->
     [{data, [{"State", censor_state(State)}]}].
+-endif.
 
 close(_Transport, undefined) -> ok;
 close(Transport, Socket) ->
