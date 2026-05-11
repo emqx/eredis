@@ -32,7 +32,7 @@ jobs:
         run: rebar3 ct -v -c
       - name: cover report
         run: rebar3 cover -v
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          name: cover
+          name: cover-${{ matrix.erlang.otp }}-${{ matrix.erlang.rebar3 }}
           path: _build/test/cover

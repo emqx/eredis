@@ -236,6 +236,20 @@ maybe_start_sentinel(Args) ->
             end;
         Sentinel ->
             Servers = proplists:get_value(servers, Args, []),
-            _ = eredis_sentinel:start_link(Servers, Options),
+            _ = eredis_sentinel:start_link(Servers, sentinel_options(Args, Options)),
             {"sentinel:" ++ Sentinel, 6379}
+    end.
+
+sentinel_options(Args, Options) ->
+    maybe_prepend_option(username, Args, maybe_prepend_option(password, Args, Options)).
+
+maybe_prepend_option(Key, Args, Options) ->
+    case proplists:is_defined(Key, Options) of
+        true ->
+            Options;
+        false ->
+            case proplists:get_value(Key, Args) of
+                undefined -> Options;
+                Value -> [{Key, Value} | Options]
+            end
     end.
