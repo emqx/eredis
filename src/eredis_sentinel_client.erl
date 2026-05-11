@@ -76,7 +76,12 @@ ping(Pid) ->
     end.
 
 has_password(Opts) ->
-    proplists:get_value(password, Opts, "") =/= "".
+    case proplists:get_value(password, Opts, undefined) of
+        undefined -> false;
+        "" -> false;
+        <<>> -> false;
+        _ -> true
+    end.
 
 credentials(Opts) ->
     Password = proplists:get_value(password, Opts, ""),

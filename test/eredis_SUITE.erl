@@ -20,6 +20,7 @@ all() ->
         {group, ssl},
         sentinel_auth_test,
         sentinel_auth_fallback_test,
+        sentinel_empty_binary_password_test,
         sentinel_ping_timeout_test,
         fake_sentinel_resp_framing_test
     ].
@@ -235,6 +236,14 @@ sentinel_auth_fallback_test(_Config) ->
     Acceptor ! stop,
     ok.
 
+sentinel_empty_binary_password_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(ping_forbidden),
+    {ok, C} = eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, <<>>}]),
+    ?assertEqual({ok, {"127.0.0.1", 6379}}, eredis_sentinel_client:get_master(C, mymaster)),
+    eredis_sentinel_client:stop(C),
+    Acceptor ! stop,
+    ok.
+
 sentinel_ping_timeout_test(_Config) ->
     {Port, Acceptor} = start_fake_sentinel(ping_timeout),
     Result = (catch eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, "public"}])),
@@ -316,12 +325,17 @@ fake_sentinel_accept(Parent, Listen, Mode) ->
     after 0 ->
         case gen_tcp:accept(Listen, 100) of
             {ok, Socket} ->
-                fake_sentinel_loop(Parent, Socket, Mode, Mode =:= auth_disabled, <<>>),
+                fake_sentinel_loop(Parent, Socket, Mode, initial_auth_state(Mode), <<>>),
                 fake_sentinel_accept(Parent, Listen, Mode);
             {error, timeout} ->
                 fake_sentinel_accept(Parent, Listen, Mode)
         end
     end.
+
+initial_auth_state(auth_required) ->
+    false;
+initial_auth_state(_) ->
+    true.
 
 fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer) ->
     receive
@@ -361,13 +375,15 @@ handle_fake_sentinel_commands(Parent, Socket, Mode, Authed, [Command | Rest]) ->
             close
     end.
 
+handle_fake_sentinel_command(_Parent, Socket, ping_forbidden, Authed, [<<"PING">>]) ->
+    ok = gen_tcp:send(Socket, <<"-ERR PING should not be sent.\r\n">>),
+    {continue, Authed};
+handle_fake_sentinel_command(_Parent, _Socket, ping_timeout, Authed, [<<"PING">>]) ->
+    {continue, Authed};
 handle_fake_sentinel_command(_Parent, Socket, _Mode, true, [<<"PING">>]) ->
     ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(_Parent, _Socket, ping_timeout, Authed, [<<"PING">>]) ->
-    {continue, Authed};
-handle_fake_sentinel_command(Parent, Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
-    Parent ! sentinel_authed,
+handle_fake_sentinel_command(_Parent, Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
     ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
     {continue, true};
 handle_fake_sentinel_command(_Parent, Socket, _Mode, _Authed, [<<"AUTH">>, <<"public">>]) ->
