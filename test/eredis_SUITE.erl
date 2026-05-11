@@ -22,7 +22,8 @@ all() ->
         sentinel_auth_fallback_test,
         sentinel_empty_binary_password_test,
         sentinel_ping_timeout_test,
-        fake_sentinel_resp_framing_test
+        fake_sentinel_resp_framing_test,
+        fake_sentinel_stop_test
     ].
 
 groups() ->
@@ -269,6 +270,15 @@ fake_sentinel_resp_framing_test(_Config) ->
     Acceptor ! stop,
     ok.
 
+fake_sentinel_stop_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(auth_disabled),
+    Ref = erlang:monitor(process, Acceptor),
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    Acceptor ! stop,
+    ?assertEqual(ok, wait_for_process_down(Ref, Acceptor, 1000)),
+    gen_tcp:close(Socket),
+    ok.
+
 socket_closed_test(Config) ->
     C = c(Config),
     Header = case proplists:get_value(t, Config) of
@@ -311,24 +321,34 @@ gather_remote_queries([Pid | Rest], Acc) ->
             error({gather_remote_queries, timeout})
     end.
 
+wait_for_process_down(Ref, Pid, Timeout) ->
+    receive
+        {'DOWN', Ref, process, Pid, _Reason} ->
+            ok
+    after Timeout ->
+        Pid ! stop,
+        error({process_still_alive, Pid})
+    end.
+
 start_fake_sentinel(Mode) ->
-    Parent = self(),
     {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {packet, raw}, {ip, {127, 0, 0, 1}}]),
     {ok, Port} = inet:port(Listen),
-    Acceptor = spawn_link(fun() -> fake_sentinel_accept(Parent, Listen, Mode) end),
+    Acceptor = spawn_link(fun() -> fake_sentinel_accept(Listen, Mode) end),
     {Port, Acceptor}.
 
-fake_sentinel_accept(Parent, Listen, Mode) ->
+fake_sentinel_accept(Listen, Mode) ->
     receive
         stop ->
             gen_tcp:close(Listen)
     after 0 ->
         case gen_tcp:accept(Listen, 100) of
             {ok, Socket} ->
-                fake_sentinel_loop(Parent, Socket, Mode, initial_auth_state(Mode), <<>>),
-                fake_sentinel_accept(Parent, Listen, Mode);
+                case fake_sentinel_loop(Listen, Socket, Mode, initial_auth_state(Mode), <<>>) of
+                    stopped -> ok;
+                    ok -> fake_sentinel_accept(Listen, Mode)
+                end;
             {error, timeout} ->
-                fake_sentinel_accept(Parent, Listen, Mode)
+                fake_sentinel_accept(Listen, Mode)
         end
     end.
 
@@ -337,62 +357,64 @@ initial_auth_state(auth_required) ->
 initial_auth_state(_) ->
     true.
 
-fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer) ->
+fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer) ->
     receive
         stop ->
-            gen_tcp:close(Socket)
+            gen_tcp:close(Socket),
+            gen_tcp:close(Listen),
+            stopped
     after 0 ->
-        case gen_tcp:recv(Socket, 0, 5000) of
+        case gen_tcp:recv(Socket, 0, 100) of
             {ok, Data} ->
-                handle_fake_sentinel_data(Parent, Socket, Mode, Authed, <<Buffer/binary, Data/binary>>);
+                handle_fake_sentinel_data(Listen, Socket, Mode, Authed, <<Buffer/binary, Data/binary>>);
             {error, timeout} ->
-                fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer);
+                fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer);
             {error, closed} ->
                 ok
         end
     end.
 
-handle_fake_sentinel_data(Parent, Socket, Mode, Authed, Buffer) ->
+handle_fake_sentinel_data(Listen, Socket, Mode, Authed, Buffer) ->
     case parse_resp_commands(Buffer) of
         {ok, Commands, Rest} ->
-            case handle_fake_sentinel_commands(Parent, Socket, Mode, Authed, Commands) of
+            case handle_fake_sentinel_commands(Socket, Mode, Authed, Commands) of
                 {continue, Authed1} ->
-                    fake_sentinel_loop(Parent, Socket, Mode, Authed1, Rest);
+                    fake_sentinel_loop(Listen, Socket, Mode, Authed1, Rest);
                 close ->
                     gen_tcp:close(Socket)
             end;
         more ->
-            fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer)
+            fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer)
     end.
 
-handle_fake_sentinel_commands(_Parent, _Socket, _Mode, Authed, []) ->
+handle_fake_sentinel_commands(_Socket, _Mode, Authed, []) ->
     {continue, Authed};
-handle_fake_sentinel_commands(Parent, Socket, Mode, Authed, [Command | Rest]) ->
-    case handle_fake_sentinel_command(Parent, Socket, Mode, Authed, Command) of
+handle_fake_sentinel_commands(Socket, Mode, Authed, [Command | Rest]) ->
+    case handle_fake_sentinel_command(Socket, Mode, Authed, Command) of
         {continue, Authed1} ->
-            handle_fake_sentinel_commands(Parent, Socket, Mode, Authed1, Rest);
+            handle_fake_sentinel_commands(Socket, Mode, Authed1, Rest);
         close ->
             close
     end.
 
-handle_fake_sentinel_command(_Parent, Socket, ping_forbidden, Authed, [<<"PING">>]) ->
+handle_fake_sentinel_command(Socket, ping_forbidden, Authed, [<<"PING">>]) ->
     ok = gen_tcp:send(Socket, <<"-ERR PING should not be sent.\r\n">>),
     {continue, Authed};
-handle_fake_sentinel_command(_Parent, _Socket, ping_timeout, Authed, [<<"PING">>]) ->
+handle_fake_sentinel_command(_Socket, ping_timeout, Authed, [<<"PING">>]) ->
     {continue, Authed};
-handle_fake_sentinel_command(_Parent, Socket, _Mode, true, [<<"PING">>]) ->
+handle_fake_sentinel_command(Socket, _Mode, true, [<<"PING">>]) ->
     ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(_Parent, Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
+handle_fake_sentinel_command(Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
     ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(_Parent, Socket, _Mode, _Authed, [<<"AUTH">>, <<"public">>]) ->
+handle_fake_sentinel_command(Socket, _Mode, _Authed, [<<"AUTH">>, <<"public">>]) ->
     ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
     close;
-handle_fake_sentinel_command(_Parent, Socket, _Mode, true, [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>]) ->
+handle_fake_sentinel_command(Socket, _Mode, true, [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>]) ->
     ok = gen_tcp:send(Socket, <<"*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(_Parent, Socket, _Mode, Authed, _Command) ->
+handle_fake_sentinel_command(Socket, _Mode, Authed, _Command) ->
     ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
     {continue, Authed}.
 
