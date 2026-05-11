@@ -17,7 +17,11 @@
 all() ->
     [
         {group, tcp},
-        {group, ssl}
+        {group, ssl},
+        sentinel_auth_test,
+        sentinel_auth_fallback_test,
+        sentinel_ping_timeout_test,
+        fake_sentinel_resp_framing_test
     ].
 
 groups() ->
@@ -31,8 +35,6 @@ groups() ->
              pipeline_mixed_test,
              q_noreply_test,
              q_async_test,
-             sentinel_auth_test,
-             sentinel_auth_fallback_test,
              socket_closed_test],
     AuthGroups = [{group, username_password}, {group, password_only}],
     [
@@ -233,6 +235,31 @@ sentinel_auth_fallback_test(_Config) ->
     Acceptor ! stop,
     ok.
 
+sentinel_ping_timeout_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(ping_timeout),
+    Result = (catch eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, "public"}])),
+    ?assertMatch({error, #{type := connection_error, reason := timeout}}, Result),
+    Acceptor ! stop,
+    ok.
+
+fake_sentinel_resp_framing_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(auth_required),
+    {ok, Socket} = gen_tcp:connect({127, 0, 0, 1}, Port, [binary, {active, false}, {packet, raw}]),
+    Ping = iolist_to_binary(eredis:create_multibulk(["PING"])),
+    {PingHead, PingTail} = split_binary(Ping, 3),
+    ok = gen_tcp:send(Socket, PingHead),
+    ?assertEqual({error, timeout}, gen_tcp:recv(Socket, 0, 50)),
+    ok = gen_tcp:send(Socket, PingTail),
+    ?assertEqual(<<"-NOAUTH Authentication required.\r\n">>, recv_until(Socket, <<"\r\n">>, 1000)),
+    Auth = iolist_to_binary(eredis:create_multibulk(["AUTH", "public"])),
+    GetMaster = iolist_to_binary(eredis:create_multibulk(["SENTINEL", "get-master-addr-by-name", "mymaster"])),
+    ok = gen_tcp:send(Socket, <<Auth/binary, GetMaster/binary>>),
+    ?assertEqual(<<"+OK\r\n*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>,
+                 recv_until(Socket, <<"6379\r\n">>, 1000)),
+    gen_tcp:close(Socket),
+    Acceptor ! stop,
+    ok.
+
 socket_closed_test(Config) ->
     C = c(Config),
     Header = case proplists:get_value(t, Config) of
@@ -289,50 +316,127 @@ fake_sentinel_accept(Parent, Listen, Mode) ->
     after 0 ->
         case gen_tcp:accept(Listen, 100) of
             {ok, Socket} ->
-                fake_sentinel_loop(Parent, Socket, Mode, Mode =:= auth_disabled),
+                fake_sentinel_loop(Parent, Socket, Mode, Mode =:= auth_disabled, <<>>),
                 fake_sentinel_accept(Parent, Listen, Mode);
             {error, timeout} ->
                 fake_sentinel_accept(Parent, Listen, Mode)
         end
     end.
 
-fake_sentinel_loop(Parent, Socket, Mode, Authed) ->
+fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer) ->
     receive
         stop ->
             gen_tcp:close(Socket)
     after 0 ->
         case gen_tcp:recv(Socket, 0, 5000) of
             {ok, Data} ->
-                case parse_resp_command(Data) of
-                    [<<"PING">>] when Authed ->
-                        ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
-                        fake_sentinel_loop(Parent, Socket, Mode, Authed);
-                    [<<"AUTH">>, <<"public">>] when Mode =:= auth_required ->
-                        Parent ! sentinel_authed,
-                        ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
-                        fake_sentinel_loop(Parent, Socket, Mode, true);
-                    [<<"AUTH">>, <<"public">>] ->
-                        ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
-                        gen_tcp:close(Socket);
-                    [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>] when Authed ->
-                        ok = gen_tcp:send(Socket, <<"*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>),
-                        fake_sentinel_loop(Parent, Socket, Mode, Authed);
-                    _ ->
-                        ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
-                        fake_sentinel_loop(Parent, Socket, Mode, Authed)
-                end;
+                handle_fake_sentinel_data(Parent, Socket, Mode, Authed, <<Buffer/binary, Data/binary>>);
+            {error, timeout} ->
+                fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer);
             {error, closed} ->
                 ok
         end
     end.
 
-parse_resp_command(Data) ->
-    Lines = binary:split(Data, <<"\r\n">>, [global]),
-    parse_resp_lines(tl(Lines), []).
+handle_fake_sentinel_data(Parent, Socket, Mode, Authed, Buffer) ->
+    case parse_resp_commands(Buffer) of
+        {ok, Commands, Rest} ->
+            case handle_fake_sentinel_commands(Parent, Socket, Mode, Authed, Commands) of
+                {continue, Authed1} ->
+                    fake_sentinel_loop(Parent, Socket, Mode, Authed1, Rest);
+                close ->
+                    gen_tcp:close(Socket)
+            end;
+        more ->
+            fake_sentinel_loop(Parent, Socket, Mode, Authed, Buffer)
+    end.
 
-parse_resp_lines([], Acc) ->
-    lists:reverse(Acc);
-parse_resp_lines([<<"$", _/binary>>, Arg | Rest], Acc) ->
-    parse_resp_lines(Rest, [Arg | Acc]);
-parse_resp_lines([_ | Rest], Acc) ->
-    parse_resp_lines(Rest, Acc).
+handle_fake_sentinel_commands(_Parent, _Socket, _Mode, Authed, []) ->
+    {continue, Authed};
+handle_fake_sentinel_commands(Parent, Socket, Mode, Authed, [Command | Rest]) ->
+    case handle_fake_sentinel_command(Parent, Socket, Mode, Authed, Command) of
+        {continue, Authed1} ->
+            handle_fake_sentinel_commands(Parent, Socket, Mode, Authed1, Rest);
+        close ->
+            close
+    end.
+
+handle_fake_sentinel_command(_Parent, Socket, _Mode, true, [<<"PING">>]) ->
+    ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(_Parent, _Socket, ping_timeout, Authed, [<<"PING">>]) ->
+    {continue, Authed};
+handle_fake_sentinel_command(Parent, Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
+    Parent ! sentinel_authed,
+    ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(_Parent, Socket, _Mode, _Authed, [<<"AUTH">>, <<"public">>]) ->
+    ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
+    close;
+handle_fake_sentinel_command(_Parent, Socket, _Mode, true, [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>]) ->
+    ok = gen_tcp:send(Socket, <<"*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(_Parent, Socket, _Mode, Authed, _Command) ->
+    ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
+    {continue, Authed}.
+
+parse_resp_commands(Data) ->
+    parse_resp_commands(Data, []).
+
+parse_resp_commands(<<>>, Acc) ->
+    {ok, lists:reverse(Acc), <<>>};
+parse_resp_commands(Data, Acc) ->
+    case parse_resp_command(Data) of
+        {ok, Command, Rest} ->
+            parse_resp_commands(Rest, [Command | Acc]);
+        more when Acc =:= [] ->
+            more;
+        more ->
+            {ok, lists:reverse(Acc), Data}
+    end.
+
+parse_resp_command(Data) ->
+    case split_resp_line(Data) of
+        {ok, <<"*", CountBin/binary>>, Rest} ->
+            parse_resp_args(Rest, binary_to_integer(CountBin), []);
+        more ->
+            more
+    end.
+
+parse_resp_args(Rest, 0, Acc) ->
+    {ok, lists:reverse(Acc), Rest};
+parse_resp_args(Data, Count, Acc) ->
+    case split_resp_line(Data) of
+        {ok, <<"$", SizeBin/binary>>, Rest} ->
+            Size = binary_to_integer(SizeBin),
+            case Rest of
+                <<Arg:Size/binary, "\r\n", Tail/binary>> ->
+                    parse_resp_args(Tail, Count - 1, [Arg | Acc]);
+                _ ->
+                    more
+            end;
+        more ->
+            more
+    end.
+
+split_resp_line(Data) ->
+    case binary:match(Data, <<"\r\n">>) of
+        {Pos, 2} ->
+            Line = binary:part(Data, 0, Pos),
+            Rest = binary:part(Data, Pos + 2, byte_size(Data) - Pos - 2),
+            {ok, Line, Rest};
+        nomatch ->
+            more
+    end.
+
+recv_until(Socket, Pattern, Timeout) ->
+    recv_until(Socket, Pattern, Timeout, <<>>).
+
+recv_until(Socket, Pattern, Timeout, Acc) ->
+    case binary:match(Acc, Pattern) of
+        nomatch ->
+            {ok, Data} = gen_tcp:recv(Socket, 0, Timeout),
+            recv_until(Socket, Pattern, Timeout, <<Acc/binary, Data/binary>>);
+        _ ->
+            Acc
+    end.

@@ -49,7 +49,7 @@ get_master_response({error, <<"IDONTKNOW", _Rest/binary >>}) ->
 start_link_maybe_auth(Host, Port, Opts) ->
     case start_link_without_auth(Host, Port, Opts) of
         {ok, Pid} ->
-            case eredis:q(Pid, ["PING"]) of
+            case ping(Pid) of
                 {ok, _} ->
                     {ok, Pid};
                 {error, Reason} ->
@@ -65,6 +65,15 @@ start_link_maybe_auth(Host, Port, Opts) ->
 
 start_link_without_auth(Host, Port, Opts) ->
     eredis:start_link(Host, Port, undefined, "", no_reconnect, 5000, Opts).
+
+ping(Pid) ->
+    try eredis:q(Pid, ["PING"]) of
+        Result -> Result
+    catch
+        exit:{timeout, _} -> {error, timeout};
+        exit:Reason -> {error, Reason};
+        Class:Reason -> {error, {Class, Reason}}
+    end.
 
 has_password(Opts) ->
     proplists:get_value(password, Opts, "") =/= "".
