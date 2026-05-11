@@ -31,6 +31,8 @@ groups() ->
              pipeline_mixed_test,
              q_noreply_test,
              q_async_test,
+             sentinel_auth_test,
+             sentinel_auth_fallback_test,
              socket_closed_test],
     AuthGroups = [{group, username_password}, {group, password_only}],
     [
@@ -215,6 +217,22 @@ q_async_test(Config) ->
 undefined_database_test() ->
     ?assertMatch({ok,_}, eredis:start_link("localhost", 6379, undefined)).
 
+sentinel_auth_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(auth_required),
+    {ok, C} = eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, "public"}]),
+    ?assertEqual({ok, {"127.0.0.1", 6379}}, eredis_sentinel_client:get_master(C, mymaster)),
+    eredis_sentinel_client:stop(C),
+    Acceptor ! stop,
+    ok.
+
+sentinel_auth_fallback_test(_Config) ->
+    {Port, Acceptor} = start_fake_sentinel(auth_disabled),
+    {ok, C} = eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, "public"}]),
+    ?assertEqual({ok, {"127.0.0.1", 6379}}, eredis_sentinel_client:get_master(C, mymaster)),
+    eredis_sentinel_client:stop(C),
+    Acceptor ! stop,
+    ok.
+
 socket_closed_test(Config) ->
     C = c(Config),
     Header = case proplists:get_value(t, Config) of
@@ -256,3 +274,65 @@ gather_remote_queries([Pid | Rest], Acc) ->
         10000 ->
             error({gather_remote_queries, timeout})
     end.
+
+start_fake_sentinel(Mode) ->
+    Parent = self(),
+    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {packet, raw}, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Listen),
+    Acceptor = spawn_link(fun() -> fake_sentinel_accept(Parent, Listen, Mode) end),
+    {Port, Acceptor}.
+
+fake_sentinel_accept(Parent, Listen, Mode) ->
+    receive
+        stop ->
+            gen_tcp:close(Listen)
+    after 0 ->
+        case gen_tcp:accept(Listen, 100) of
+            {ok, Socket} ->
+                fake_sentinel_loop(Parent, Socket, Mode, Mode =:= auth_disabled),
+                fake_sentinel_accept(Parent, Listen, Mode);
+            {error, timeout} ->
+                fake_sentinel_accept(Parent, Listen, Mode)
+        end
+    end.
+
+fake_sentinel_loop(Parent, Socket, Mode, Authed) ->
+    receive
+        stop ->
+            gen_tcp:close(Socket)
+    after 0 ->
+        case gen_tcp:recv(Socket, 0, 5000) of
+            {ok, Data} ->
+                case parse_resp_command(Data) of
+                    [<<"PING">>] when Authed ->
+                        ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
+                        fake_sentinel_loop(Parent, Socket, Mode, Authed);
+                    [<<"AUTH">>, <<"public">>] when Mode =:= auth_required ->
+                        Parent ! sentinel_authed,
+                        ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+                        fake_sentinel_loop(Parent, Socket, Mode, true);
+                    [<<"AUTH">>, <<"public">>] ->
+                        ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
+                        gen_tcp:close(Socket);
+                    [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>] when Authed ->
+                        ok = gen_tcp:send(Socket, <<"*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>),
+                        fake_sentinel_loop(Parent, Socket, Mode, Authed);
+                    _ ->
+                        ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
+                        fake_sentinel_loop(Parent, Socket, Mode, Authed)
+                end;
+            {error, closed} ->
+                ok
+        end
+    end.
+
+parse_resp_command(Data) ->
+    Lines = binary:split(Data, <<"\r\n">>, [global]),
+    parse_resp_lines(tl(Lines), []).
+
+parse_resp_lines([], Acc) ->
+    lists:reverse(Acc);
+parse_resp_lines([<<"$", _/binary>>, Arg | Rest], Acc) ->
+    parse_resp_lines(Rest, [Arg | Acc]);
+parse_resp_lines([_ | Rest], Acc) ->
+    parse_resp_lines(Rest, Acc).

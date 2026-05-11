@@ -15,7 +15,10 @@ start_link(Host, Port) when is_list(Host), is_integer(Port) ->
     start_link(Host, Port, []).
 
 start_link(Host, Port, Opts) when is_list(Host), is_integer(Port), is_list(Opts) ->
-    eredis:start_link(Host, Port, undefined, "", no_reconnect, 5000, Opts).
+    case has_password(Opts) of
+        true -> start_link_maybe_auth(Host, Port, Opts);
+        false -> start_link_without_auth(Host, Port, Opts)
+    end.
 
 stop(Pid) when is_pid(Pid) ->
     catch eredis:stop(Pid).
@@ -42,3 +45,38 @@ get_master_response({ok, undefined}) ->
     {error, ?MASTER_UNKNOWN};
 get_master_response({error, <<"IDONTKNOW", _Rest/binary >>}) ->
     {error, ?MASTER_UNREACHABLE}.
+
+start_link_maybe_auth(Host, Port, Opts) ->
+    case start_link_without_auth(Host, Port, Opts) of
+        {ok, Pid} ->
+            case eredis:q(Pid, ["PING"]) of
+                {ok, _} ->
+                    {ok, Pid};
+                {error, Reason} ->
+                    stop(Pid),
+                    case auth_required(Reason) of
+                        true -> eredis:start_link(Host, Port, undefined, credentials(Opts), no_reconnect, 5000, Opts);
+                        false -> {error, #{type => connection_error, reason => Reason, host => Host, port => Port}}
+                    end
+            end;
+        Error ->
+            Error
+    end.
+
+start_link_without_auth(Host, Port, Opts) ->
+    eredis:start_link(Host, Port, undefined, "", no_reconnect, 5000, Opts).
+
+has_password(Opts) ->
+    proplists:get_value(password, Opts, "") =/= "".
+
+credentials(Opts) ->
+    Password = proplists:get_value(password, Opts, ""),
+    case proplists:get_value(username, Opts, undefined) of
+        undefined -> Password;
+        Username -> #{username => Username, password => Password}
+    end.
+
+auth_required(Reason) when is_binary(Reason) ->
+    binary:match(Reason, <<"NOAUTH">>) =/= nomatch;
+auth_required(_) ->
+    false.
