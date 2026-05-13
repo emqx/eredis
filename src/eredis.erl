@@ -241,15 +241,16 @@ maybe_start_sentinel(Args) ->
     end.
 
 sentinel_options(Args, Options) ->
-    maybe_prepend_option(username, Args, maybe_prepend_option(password, Args, Options)).
+    Options1 = maybe_prepend_sentinel_option(password, sentinel_password, Args, Options),
+    maybe_prepend_sentinel_option(username, sentinel_username, Args, Options1).
 
-maybe_prepend_option(Key, Args, Options) ->
-    case proplists:is_defined(Key, Options) of
+maybe_prepend_sentinel_option(OptionKey, ArgKey, Args, Options) ->
+    case proplists:is_defined(OptionKey, Options) of
         true ->
             Options;
         false ->
-            case proplists:get_value(Key, Args) of
+            case proplists:get_value(ArgKey, Args) of
                 undefined -> Options;
-                Value -> [{Key, Value} | Options]
+                Value -> [{OptionKey, Value} | Options]
             end
     end.

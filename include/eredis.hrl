@@ -10,6 +10,8 @@
                 | {database, string()}
                 | {username, username()}
                 | {password, password()}
+                | {sentinel_username, username()}
+                | {sentinel_password, password()}
                 | {reconnect_sleep, reconnect_sleep()}.
 -type server_args() :: [option()].
 

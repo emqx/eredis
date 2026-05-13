@@ -165,6 +165,23 @@ When starting eredis clients use string `sentinel:master_name` instead host:
 
 Port is ignored in this case, but needed as eredis:start_link/1 is a special form used in poolboy integration.
 
+When using the poolboy-style `eredis:start_link/1` arguments with Sentinel, `username`
+and `password` are used for the Redis master connection only. If the Sentinel
+instances themselves require client authentication, configure `sentinel_username`
+and/or `sentinel_password` explicitly:
+
+    eredis:start_link([
+        {servers, [{"sentinel1.lan", 26379}, {"sentinel2.lan", 26379}]},
+        {options, [{sentinel, "mymaster"}]},
+        {username, "redis-user"},
+        {password, "redis-password"},
+        {sentinel_username, "sentinel-user"},
+        {sentinel_password, "sentinel-password"}
+    ]).
+
+If `sentinel_username` and/or `sentinel_password` are not configured, eredis will
+not infer Sentinel credentials from the Redis master credentials.
+
 `eredis_client` process will ask `eredis_sentinel` about current master for `mymaster` cluster and
 connect to it. `eredis_sentinel` also tracks all clients and in case that master changes
 it will send notifications to all interested clients.

@@ -20,6 +20,9 @@ all() ->
         {group, ssl},
         sentinel_auth_test,
         sentinel_auth_fallback_test,
+        sentinel_auth_matrix_test,
+        sentinel_separate_credentials_test,
+        sentinel_credentials_not_inferred_test,
         sentinel_empty_binary_password_test,
         sentinel_ping_timeout_test,
         fake_sentinel_resp_framing_test,
@@ -238,6 +241,78 @@ sentinel_auth_fallback_test(_Config) ->
     Acceptor ! stop,
     ok.
 
+sentinel_auth_matrix_test(_Config) ->
+    Cases = [
+        #{
+            name => no_master_no_sentinel_password,
+            redis => no_auth,
+            sentinel => auth_disabled,
+            args => []
+        },
+        #{
+            name => master_password_only,
+            redis => "redis-password",
+            sentinel => auth_disabled,
+            args => [{password, "redis-password"}]
+        },
+        #{
+            name => sentinel_password_only,
+            redis => no_auth,
+            sentinel => {auth_required, "sentinel-password"},
+            args => [{sentinel_password, "sentinel-password"}]
+        },
+        #{
+            name => master_and_sentinel_passwords,
+            redis => "redis-password",
+            sentinel => {auth_required, "sentinel-password"},
+            args => [
+                {password, "redis-password"},
+                {sentinel_password, "sentinel-password"}
+            ]
+        }
+    ],
+    lists:foreach(fun assert_sentinel_connection/1, Cases),
+    ok.
+
+sentinel_separate_credentials_test(_Config) ->
+    RedisPassword = "redis-password",
+    SentinelUsername = "sentinel-user",
+    SentinelPassword = "sentinel-password",
+    {RedisPort, RedisAcceptor} = start_fake_redis(RedisPassword),
+    {SentinelPort, SentinelAcceptor} = start_fake_sentinel(
+        {auth_required, SentinelUsername, SentinelPassword},
+        RedisPort
+    ),
+    try
+        {ok, C} = eredis:start_link(
+            sentinel_args(SentinelPort, RedisPassword, [
+                {sentinel_username, SentinelUsername},
+                {sentinel_password, SentinelPassword}
+            ])
+        ),
+        ?assertEqual({ok, <<"PONG">>}, eredis:q(C, ["PING"])),
+        eredis:stop(C)
+    after
+        cleanup_sentinel_test(RedisAcceptor, SentinelAcceptor)
+    end,
+    ok.
+
+sentinel_credentials_not_inferred_test(_Config) ->
+    SharedPassword = "shared-password",
+    {RedisPort, RedisAcceptor} = start_fake_redis(SharedPassword),
+    {SentinelPort, SentinelAcceptor} = start_fake_sentinel(
+        {auth_required, SharedPassword},
+        RedisPort
+    ),
+    try
+        assert_sentinel_unreachable_start_failure(
+            isolated_start_link(sentinel_args(SentinelPort, SharedPassword, []))
+        )
+    after
+        cleanup_sentinel_test(RedisAcceptor, SentinelAcceptor)
+    end,
+    ok.
+
 sentinel_empty_binary_password_test(_Config) ->
     {Port, Acceptor} = start_fake_sentinel(ping_forbidden),
     {ok, C} = eredis_sentinel_client:start_link("127.0.0.1", Port, [{password, <<>>}]),
@@ -332,33 +407,55 @@ wait_for_process_down(Ref, Pid, Timeout) ->
     end.
 
 start_fake_sentinel(Mode) ->
+    start_fake_sentinel(Mode, 6379).
+
+start_fake_sentinel(Mode, MasterPort) ->
     {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {packet, raw}, {ip, {127, 0, 0, 1}}]),
     {ok, Port} = inet:port(Listen),
-    Acceptor = spawn_link(fun() -> fake_sentinel_accept(Listen, Mode) end),
+    Mode1 = normalize_sentinel_mode(Mode),
+    Acceptor = spawn_link(fun() -> fake_sentinel_accept(Listen, Mode1, MasterPort) end),
     {Port, Acceptor}.
 
-fake_sentinel_accept(Listen, Mode) ->
+normalize_sentinel_mode({auth_required, Password}) ->
+    {auth_required, iolist_to_binary(Password)};
+normalize_sentinel_mode({auth_required, Username, Password}) ->
+    {auth_required, iolist_to_binary(Username), iolist_to_binary(Password)};
+normalize_sentinel_mode(Mode) ->
+    Mode.
+
+fake_sentinel_accept(Listen, Mode, MasterPort) ->
     receive
         stop ->
             gen_tcp:close(Listen)
     after 0 ->
         case gen_tcp:accept(Listen, 100) of
             {ok, Socket} ->
-                case fake_sentinel_loop(Listen, Socket, Mode, initial_auth_state(Mode), <<>>) of
+                case fake_sentinel_loop(
+                    Listen,
+                    Socket,
+                    Mode,
+                    MasterPort,
+                    initial_auth_state(Mode),
+                    <<>>
+                ) of
                     stopped -> ok;
-                    ok -> fake_sentinel_accept(Listen, Mode)
+                    ok -> fake_sentinel_accept(Listen, Mode, MasterPort)
                 end;
             {error, timeout} ->
-                fake_sentinel_accept(Listen, Mode)
+                fake_sentinel_accept(Listen, Mode, MasterPort)
         end
     end.
 
 initial_auth_state(auth_required) ->
     false;
+initial_auth_state({auth_required, _Password}) ->
+    false;
+initial_auth_state({auth_required, _Username, _Password}) ->
+    false;
 initial_auth_state(_) ->
     true.
 
-fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer) ->
+fake_sentinel_loop(Listen, Socket, Mode, MasterPort, Authed, Buffer) ->
     receive
         stop ->
             gen_tcp:close(Socket),
@@ -367,55 +464,274 @@ fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer) ->
     after 0 ->
         case gen_tcp:recv(Socket, 0, 100) of
             {ok, Data} ->
-                handle_fake_sentinel_data(Listen, Socket, Mode, Authed, <<Buffer/binary, Data/binary>>);
+                handle_fake_sentinel_data(
+                    Listen,
+                    Socket,
+                    Mode,
+                    MasterPort,
+                    Authed,
+                    <<Buffer/binary, Data/binary>>
+                );
             {error, timeout} ->
-                fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer);
+                fake_sentinel_loop(Listen, Socket, Mode, MasterPort, Authed, Buffer);
             {error, closed} ->
                 ok
         end
     end.
 
-handle_fake_sentinel_data(Listen, Socket, Mode, Authed, Buffer) ->
+handle_fake_sentinel_data(Listen, Socket, Mode, MasterPort, Authed, Buffer) ->
     case parse_resp_commands(Buffer) of
         {ok, Commands, Rest} ->
-            case handle_fake_sentinel_commands(Socket, Mode, Authed, Commands) of
+            case handle_fake_sentinel_commands(Socket, Mode, MasterPort, Authed, Commands) of
                 {continue, Authed1} ->
-                    fake_sentinel_loop(Listen, Socket, Mode, Authed1, Rest);
+                    fake_sentinel_loop(Listen, Socket, Mode, MasterPort, Authed1, Rest);
                 close ->
                     gen_tcp:close(Socket)
             end;
         more ->
-            fake_sentinel_loop(Listen, Socket, Mode, Authed, Buffer)
+            fake_sentinel_loop(Listen, Socket, Mode, MasterPort, Authed, Buffer)
     end.
 
-handle_fake_sentinel_commands(_Socket, _Mode, Authed, []) ->
+handle_fake_sentinel_commands(_Socket, _Mode, _MasterPort, Authed, []) ->
     {continue, Authed};
-handle_fake_sentinel_commands(Socket, Mode, Authed, [Command | Rest]) ->
-    case handle_fake_sentinel_command(Socket, Mode, Authed, Command) of
+handle_fake_sentinel_commands(Socket, Mode, MasterPort, Authed, [Command | Rest]) ->
+    case handle_fake_sentinel_command(Socket, Mode, MasterPort, Authed, Command) of
         {continue, Authed1} ->
-            handle_fake_sentinel_commands(Socket, Mode, Authed1, Rest);
+            handle_fake_sentinel_commands(Socket, Mode, MasterPort, Authed1, Rest);
         close ->
             close
     end.
 
-handle_fake_sentinel_command(Socket, ping_forbidden, Authed, [<<"PING">>]) ->
+handle_fake_sentinel_command(Socket, ping_forbidden, _MasterPort, Authed, [<<"PING">>]) ->
     ok = gen_tcp:send(Socket, <<"-ERR PING should not be sent.\r\n">>),
     {continue, Authed};
-handle_fake_sentinel_command(_Socket, ping_timeout, Authed, [<<"PING">>]) ->
+handle_fake_sentinel_command(_Socket, ping_timeout, _MasterPort, Authed, [<<"PING">>]) ->
     {continue, Authed};
-handle_fake_sentinel_command(Socket, _Mode, true, [<<"PING">>]) ->
+handle_fake_sentinel_command(Socket, _Mode, _MasterPort, true, [<<"PING">>]) ->
     ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(Socket, auth_required, _Authed, [<<"AUTH">>, <<"public">>]) ->
+handle_fake_sentinel_command(Socket, auth_required, _MasterPort, _Authed, [<<"AUTH">>, <<"public">>]) ->
     ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
     {continue, true};
-handle_fake_sentinel_command(Socket, _Mode, _Authed, [<<"AUTH">>, <<"public">>]) ->
+handle_fake_sentinel_command(Socket, {auth_required, Password}, _MasterPort, _Authed, [<<"AUTH">>, Password]) ->
+    ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(Socket, {auth_required, Username, Password}, _MasterPort, _Authed, [<<"AUTH">>, Username, Password]) ->
+    ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(Socket, auth_required, _MasterPort, _Authed, [<<"AUTH">> | _]) ->
+    ok = gen_tcp:send(Socket, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>),
+    close;
+handle_fake_sentinel_command(Socket, {auth_required, _Password}, _MasterPort, _Authed, [<<"AUTH">> | _]) ->
+    ok = gen_tcp:send(Socket, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>),
+    close;
+handle_fake_sentinel_command(Socket, {auth_required, _Username, _Password}, _MasterPort, _Authed, [<<"AUTH">> | _]) ->
+    ok = gen_tcp:send(Socket, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>),
+    close;
+handle_fake_sentinel_command(Socket, _Mode, _MasterPort, _Authed, [<<"AUTH">>, <<"public">>]) ->
     ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
     close;
-handle_fake_sentinel_command(Socket, _Mode, true, [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>]) ->
-    ok = gen_tcp:send(Socket, <<"*2\r\n$9\r\n127.0.0.1\r\n$4\r\n6379\r\n">>),
+handle_fake_sentinel_command(Socket, _Mode, MasterPort, true, [<<"SENTINEL">>, <<"get-master-addr-by-name">>, <<"mymaster">>]) ->
+    PortBin = integer_to_binary(MasterPort),
+    PortSize = integer_to_binary(byte_size(PortBin)),
+    ok = gen_tcp:send(Socket, [
+        <<"*2\r\n$9\r\n127.0.0.1\r\n$">>,
+        PortSize,
+        <<"\r\n">>,
+        PortBin,
+        <<"\r\n">>
+    ]),
     {continue, true};
-handle_fake_sentinel_command(Socket, _Mode, Authed, _Command) ->
+handle_fake_sentinel_command(Socket, _Mode, _MasterPort, true, _Command) ->
+    ok = gen_tcp:send(Socket, <<"-ERR unknown command\r\n">>),
+    {continue, true};
+handle_fake_sentinel_command(Socket, _Mode, _MasterPort, Authed, _Command) ->
+    ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
+    {continue, Authed}.
+
+sentinel_args(SentinelPort, ExtraArgs) ->
+    [
+        {servers, [{"127.0.0.1", SentinelPort}]},
+        {options, [{sentinel, "mymaster"}]},
+        {reconnect_sleep, no_reconnect},
+        {connect_timeout, 1000}
+    ] ++ ExtraArgs.
+
+sentinel_args(SentinelPort, RedisPassword, ExtraArgs) ->
+    sentinel_args(SentinelPort, [{password, RedisPassword} | ExtraArgs]).
+
+assert_sentinel_connection(
+    #{name := Name, redis := RedisMode, sentinel := SentinelMode, args := Args}
+) ->
+    {RedisPort, RedisAcceptor} = start_fake_redis(RedisMode),
+    {SentinelPort, SentinelAcceptor} = start_fake_sentinel(SentinelMode, RedisPort),
+    try
+        C = start_sentinel_connection(Name, SentinelPort, Args),
+        try
+            ?assertEqual({Name, {ok, <<"PONG">>}}, {Name, eredis:q(C, ["PING"])})
+        after
+            eredis:stop(C)
+        end
+    after
+        cleanup_sentinel_test(RedisAcceptor, SentinelAcceptor)
+    end.
+
+start_sentinel_connection(Name, SentinelPort, Args) ->
+    case catch eredis:start_link(sentinel_args(SentinelPort, Args)) of
+        {ok, C} ->
+            C;
+        Error ->
+            ct:fail({Name, Error})
+    end.
+
+assert_sentinel_unreachable_start_failure({error, {sentinel_error, sentinel_unreachable}}) ->
+    ok;
+assert_sentinel_unreachable_start_failure({'EXIT', {sentinel_error, sentinel_unreachable}}) ->
+    ok.
+
+isolated_start_link(Args) ->
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Mon} = spawn_monitor(fun() ->
+        process_flag(trap_exit, true),
+        Result = catch eredis:start_link(Args),
+        flush_sentinel_unreachable_exit(),
+        Parent ! {Ref, Result}
+    end),
+    receive
+        {Ref, Result} ->
+            wait_for_worker_down(Mon, Pid),
+            Result;
+        {'DOWN', Mon, process, Pid, normal} ->
+            receive
+                {Ref, Result} ->
+                    Result
+            after 1000 ->
+                {'EXIT', normal}
+            end;
+        {'DOWN', Mon, process, Pid, Reason} ->
+            {'EXIT', Reason}
+    end.
+
+wait_for_worker_down(Mon, Pid) ->
+    receive
+        {'DOWN', Mon, process, Pid, _Reason} ->
+            ok
+    after 1000 ->
+        ok
+    end.
+
+flush_sentinel_unreachable_exit() ->
+    receive
+        {'EXIT', _Pid, {sentinel_error, sentinel_unreachable}} ->
+            ok
+    after 100 ->
+        ok
+    end.
+
+cleanup_sentinel_test(RedisAcceptor, SentinelAcceptor) ->
+    catch eredis_sentinel:stop(),
+    RedisAcceptor ! stop,
+    SentinelAcceptor ! stop.
+
+start_fake_redis(Mode) ->
+    {ok, Listen} = gen_tcp:listen(0, [binary, {active, false}, {packet, raw}, {ip, {127, 0, 0, 1}}]),
+    {ok, Port} = inet:port(Listen),
+    Mode1 = normalize_redis_mode(Mode),
+    Acceptor = spawn_link(fun() -> fake_redis_accept(Listen, Mode1) end),
+    {Port, Acceptor}.
+
+normalize_redis_mode(no_auth) ->
+    no_auth;
+normalize_redis_mode(Password) ->
+    {auth_required, iolist_to_binary(Password)}.
+
+redis_initial_auth_state(no_auth) ->
+    true;
+redis_initial_auth_state({auth_required, _Password}) ->
+    false.
+
+fake_redis_accept(Listen, Mode) ->
+    receive
+        stop ->
+            gen_tcp:close(Listen)
+    after 0 ->
+        case gen_tcp:accept(Listen, 100) of
+            {ok, Socket} ->
+                case fake_redis_loop(
+                    Listen,
+                    Socket,
+                    Mode,
+                    redis_initial_auth_state(Mode),
+                    <<>>
+                ) of
+                    stopped -> ok;
+                    ok -> fake_redis_accept(Listen, Mode)
+                end;
+            {error, timeout} ->
+                fake_redis_accept(Listen, Mode)
+        end
+    end.
+
+fake_redis_loop(Listen, Socket, Mode, Authed, Buffer) ->
+    receive
+        stop ->
+            gen_tcp:close(Socket),
+            gen_tcp:close(Listen),
+            stopped
+    after 0 ->
+        case gen_tcp:recv(Socket, 0, 100) of
+            {ok, Data} ->
+                handle_fake_redis_data(Listen, Socket, Mode, Authed, <<Buffer/binary, Data/binary>>);
+            {error, timeout} ->
+                fake_redis_loop(Listen, Socket, Mode, Authed, Buffer);
+            {error, closed} ->
+                ok
+        end
+    end.
+
+handle_fake_redis_data(Listen, Socket, Mode, Authed, Buffer) ->
+    case parse_resp_commands(Buffer) of
+        {ok, Commands, Rest} ->
+            case handle_fake_redis_commands(Socket, Mode, Authed, Commands) of
+                {continue, Authed1} ->
+                    fake_redis_loop(Listen, Socket, Mode, Authed1, Rest);
+                close ->
+                    gen_tcp:close(Socket)
+            end;
+        more ->
+            fake_redis_loop(Listen, Socket, Mode, Authed, Buffer)
+    end.
+
+handle_fake_redis_commands(_Socket, _Mode, Authed, []) ->
+    {continue, Authed};
+handle_fake_redis_commands(Socket, Mode, Authed, [Command | Rest]) ->
+    case handle_fake_redis_command(Socket, Mode, Authed, Command) of
+        {continue, Authed1} ->
+            handle_fake_redis_commands(Socket, Mode, Authed1, Rest);
+        close ->
+            close
+    end.
+
+handle_fake_redis_command(Socket, no_auth, _Authed, [<<"AUTH">> | _]) ->
+    ok = gen_tcp:send(Socket, <<"-ERR AUTH <password> called without any password configured for the default user.\r\n">>),
+    close;
+handle_fake_redis_command(Socket, {auth_required, Password}, _Authed, [<<"AUTH">>, Password]) ->
+    ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+    {continue, true};
+handle_fake_redis_command(Socket, {auth_required, _Password}, _Authed, [<<"AUTH">> | _]) ->
+    ok = gen_tcp:send(Socket, <<"-WRONGPASS invalid username-password pair or user is disabled.\r\n">>),
+    close;
+handle_fake_redis_command(Socket, _Mode, true, [<<"PING">>]) ->
+    ok = gen_tcp:send(Socket, <<"+PONG\r\n">>),
+    {continue, true};
+handle_fake_redis_command(Socket, _Mode, true, [<<"SELECT">>, _Database]) ->
+    ok = gen_tcp:send(Socket, <<"+OK\r\n">>),
+    {continue, true};
+handle_fake_redis_command(Socket, _Mode, true, _Command) ->
+    ok = gen_tcp:send(Socket, <<"-ERR unknown command\r\n">>),
+    {continue, true};
+handle_fake_redis_command(Socket, _Mode, Authed, _Command) ->
     ok = gen_tcp:send(Socket, <<"-NOAUTH Authentication required.\r\n">>),
     {continue, Authed}.
 
