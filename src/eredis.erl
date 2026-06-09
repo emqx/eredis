@@ -15,7 +15,7 @@
 
 -export([start_link/0, start_link/1, start_link/2, start_link/3, start_link/4,
          start_link/5, start_link/6, start_link/7, stop/1, q/2, q/3, qp/2, qp/3, q_noreply/2,
-         q_async/2, q_async/3]).
+         q_async/2, q_async/3, stop_sentinel_manager/1]).
 
 %% Exported for testing
 -export([create_multibulk/1]).
@@ -86,13 +86,15 @@ start_link(Args) ->
     Password       = proplists:get_value(password, Args, ""),
     ReconnectSleep = proplists:get_value(reconnect_sleep, Args, 100),
     ConnectTimeout = proplists:get_value(connect_timeout, Args, ?TIMEOUT),
-    Options = proplists:get_value(options, Args, []),
-    {Host, Port} = maybe_start_sentinel(Args),
+    {Host, Port, Options1} = maybe_start_sentinel(Args),
     Credentials = make_credentials(Username, Password),
-    start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options).
+    start_link(Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options1).
 
 stop(Client) ->
     eredis_client:stop(Client).
+
+stop_sentinel_manager(Ref) ->
+    eredis_sentinel:stop(sentinel_manager_name(Ref)).
 
 -spec q(Client::client(), Command::[any()]) ->
                {ok, return_value()} | {error, Reason::binary() | no_connection}.
@@ -231,14 +233,29 @@ maybe_start_sentinel(Args) ->
                 undefined ->
                     Host = proplists:get_value(host, Args, "127.0.0.1"),
                     Port = proplists:get_value(port, Args, 6379),
-                    {Host, Port};
-                [{Host, Port}| _] -> {Host, Port}
+                    {Host, Port, Options};
+                [{Host, Port}| _] -> {Host, Port, Options}
             end;
         Sentinel ->
             Servers = proplists:get_value(servers, Args, []),
-            _ = eredis_sentinel:start_link(Servers, sentinel_options(Args, Options)),
-            {"sentinel:" ++ Sentinel, 6379}
+            Options1 = maybe_start_sentinel_manager(Servers, sentinel_options(Args, Options), Options),
+            {"sentinel:" ++ Sentinel, 6379, Options1}
     end.
+
+maybe_start_sentinel_manager(Servers, SentinelOptions, Options) ->
+    case proplists:get_value(sentinel_manager_ref, Options) of
+        undefined ->
+            %% Keep the legacy singleton Sentinel manager for compatibility.
+            _ = eredis_sentinel_sup:start_child(Servers, SentinelOptions),
+            Options;
+        Ref ->
+            ManagerName = sentinel_manager_name(Ref),
+            _ = eredis_sentinel_sup:start_child(Servers, SentinelOptions, ManagerName),
+            [{sentinel_manager, ManagerName} | proplists:delete(sentinel_manager, Options)]
+    end.
+
+sentinel_manager_name(Ref) ->
+    {eredis_sentinel, Ref}.
 
 sentinel_options(Args, Options) ->
     Options1 = maybe_prepend_sentinel_option(password, sentinel_password, Args, Options),

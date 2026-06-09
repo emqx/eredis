@@ -44,6 +44,8 @@
           credentials :: credentials(),
           database :: binary() | undefined,
           sentinel :: undefined | atom(),
+          %% `undefined' keeps the legacy singleton Sentinel manager for compatibility.
+          sentinel_manager :: undefined | term(),
           reconnect_sleep :: reconnect_sleep() | undefined,
           connect_timeout :: integer() | undefined,
           socket :: port() | undefined,
@@ -100,7 +102,8 @@ init([Host, Port, Database, Credentials, ReconnectSleep, ConnectTimeout, Options
                    connect_timeout = ConnectTimeout,
                    parser_state = eredis_parser:init(),
                    queue = queue:new(),
-                   sentinel = Sentinel},
+                   sentinel = Sentinel,
+                   sentinel_manager = proplists:get_value(sentinel_manager, Options, undefined)},
     case connect(State, Options) of
         {ok, NewState} ->
             {ok, NewState};
@@ -378,13 +381,18 @@ safe_send(Pid, Value) ->
 
 connect(#state{sentinel = undefined} = State, Options) ->
     connect1(State, Options);
-connect(#state{sentinel = Master} = State, Options) ->
-    case eredis_sentinel:get_master(Master, true) of
+connect(#state{sentinel = Master, sentinel_manager = Manager} = State, Options) ->
+    case get_sentinel_master(Manager, Master) of
         {ok, {Host, Port}} ->
             connect1(State#state{host=Host, port=Port}, Options);
         {error, Error} ->
             {error, {sentinel_error, Error}}
     end.
+
+get_sentinel_master(undefined, Master) ->
+    eredis_sentinel:get_master(Master, true);
+get_sentinel_master(Manager, Master) ->
+    eredis_sentinel:get_master(Manager, Master, true).
 
 connect1(State, Options) ->
     case proplists:get_value(ssl_options , Options, []) of
