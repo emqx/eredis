@@ -22,6 +22,17 @@ all() ->
         sentinel_auth_fallback_test,
         sentinel_auth_matrix_test,
         sentinel_separate_credentials_test,
+        eredis_application_starts_no_sentinel_resources_test,
+        eredis_sentinel_resources_start_lazily_test,
+        stop_missing_sentinel_manager_does_not_start_resources_test,
+        eredis_sentinel_sup_legacy_start_link_test,
+        eredis_sentinel_sup_replaces_stopped_child_spec_test,
+        sentinel_registry_survives_first_starter_exit_test,
+        sentinel_registry_management_api_test,
+        sentinel_manager_ref_isolates_sentinel_state_test,
+        sentinel_manager_stop_api_test,
+        start_link_args_without_sentinel_host_port_test,
+        start_link_args_without_sentinel_servers_test,
         sentinel_credentials_not_inferred_test,
         sentinel_empty_binary_password_test,
         sentinel_ping_timeout_test,
@@ -297,6 +308,260 @@ sentinel_separate_credentials_test(_Config) ->
     end,
     ok.
 
+eredis_application_starts_no_sentinel_resources_test(_Config) ->
+    catch eredis_sentinel:stop(),
+    catch application:stop(eredis),
+    catch eredis_sentinel_registry:stop(),
+    catch application:stop(gproc),
+    try
+        {ok, _Started} = application:ensure_all_started(eredis),
+        ?assert(is_pid(whereis(eredis_sup))),
+        ?assertEqual(undefined, whereis(eredis_sentinel)),
+        ?assertEqual(undefined, whereis(eredis_sentinel_sup)),
+        ?assert(is_pid(whereis(gproc)))
+    after
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+eredis_sentinel_resources_start_lazily_test(_Config) ->
+    catch application:stop(eredis),
+    catch eredis_sentinel_registry:stop(),
+    catch application:stop(gproc),
+    try
+        {ok, _Started} = application:ensure_all_started(eredis),
+        ?assertEqual(undefined, whereis(eredis_sentinel_sup)),
+        ?assert(is_pid(whereis(gproc))),
+
+        {ok, Pid} =
+            eredis_sentinel_sup:start_child(
+                [{"127.0.0.1", 26379}], [], {eredis_SUITE, lazy_resources}
+            ),
+        try
+            ?assert(is_pid(whereis(eredis_sentinel_sup))),
+            ?assert(is_pid(whereis(gproc))),
+            ?assertEqual(Pid, eredis_sentinel_registry:whereis_name({eredis_SUITE, lazy_resources}))
+        after
+            catch eredis_sentinel:stop({eredis_SUITE, lazy_resources})
+        end
+    after
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+stop_missing_sentinel_manager_does_not_start_resources_test(_Config) ->
+    catch application:stop(eredis),
+    catch application:stop(gproc),
+    try
+        {ok, _Started} = application:ensure_all_started(eredis),
+        ?assertEqual(ok, eredis:stop_sentinel_manager({eredis_SUITE, missing_manager})),
+        ?assert(is_pid(whereis(eredis_sup))),
+        ?assert(is_pid(whereis(gproc))),
+        ?assertEqual(undefined, whereis(eredis_sentinel)),
+        ?assertEqual(undefined, whereis(eredis_sentinel_sup)),
+        ?assertEqual(undefined, eredis_sentinel_registry:whereis_name({eredis_SUITE, missing_manager}))
+    after
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+eredis_sentinel_sup_legacy_start_link_test(_Config) ->
+    catch application:stop(eredis),
+    catch application:stop(gproc),
+    try
+        {ok, Sup} = eredis_sentinel_sup:start_link([{"127.0.0.1", 26379}]),
+        unlink(Sup),
+        Sentinel = whereis(eredis_sentinel),
+        ?assertEqual(Sup, whereis(eredis_sentinel_sup)),
+        ?assert(is_pid(Sentinel))
+    after
+        stop_registered_process(eredis_sentinel_sup),
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+eredis_sentinel_sup_replaces_stopped_child_spec_test(_Config) ->
+    catch eredis_sentinel:stop(),
+    catch application:stop(eredis),
+    MasterPort1 = 16381,
+    MasterPort2 = 16382,
+    {SentinelPort1, SentinelAcceptor1} = start_fake_sentinel(auth_disabled, MasterPort1),
+    try
+        {ok, Pid1} = eredis_sentinel_sup:start_child([{"127.0.0.1", SentinelPort1}], []),
+        ?assertEqual({ok, {"127.0.0.1", MasterPort1}}, eredis_sentinel:get_master(mymaster)),
+        ?assertEqual(ok, eredis_sentinel:stop()),
+        wait_until_dead(Pid1),
+        SentinelAcceptor1 ! stop,
+        wait_until_dead(SentinelAcceptor1),
+
+        {SentinelPort2, SentinelAcceptor2} = start_fake_sentinel(auth_disabled, MasterPort2),
+        try
+            {ok, Pid2} = eredis_sentinel_sup:start_child([{"127.0.0.1", SentinelPort2}], []),
+            ?assertNotEqual(Pid1, Pid2),
+            ?assertEqual({ok, {"127.0.0.1", MasterPort2}}, eredis_sentinel:get_master(mymaster))
+        after
+            catch eredis_sentinel:stop(),
+            SentinelAcceptor2 ! stop
+        end
+    after
+        catch eredis_sentinel:stop(),
+        SentinelAcceptor1 ! stop,
+        catch application:stop(eredis)
+    end,
+    ok.
+
+sentinel_registry_survives_first_starter_exit_test(_Config) ->
+    catch application:stop(eredis),
+    catch application:stop(gproc),
+    Manager1 = {eredis_SUITE, registry_owner_one},
+    Manager2 = {eredis_SUITE, registry_owner_two},
+    {ok, _Started} = application:ensure_all_started(eredis),
+    {Starter1, Pid1} = start_sentinel_manager_from_owner(Manager1),
+    {Starter2, Pid2} = start_sentinel_manager_from_owner(Manager2),
+    try
+        ?assertEqual(Pid1, eredis_sentinel_registry:whereis_name(Manager1)),
+        ?assertEqual(Pid2, eredis_sentinel_registry:whereis_name(Manager2)),
+        Starter1 ! stop,
+        wait_until_dead(Starter1),
+        ?assertEqual(Pid2, eredis_sentinel_registry:whereis_name(Manager2)),
+        ?assertEqual(
+            {ok, {"127.0.0.1", 26379, undefined}},
+            eredis_sentinel:get_current_sentinel(Manager2)
+        )
+    after
+        catch eredis_sentinel:stop(Manager1),
+        catch eredis_sentinel:stop(Manager2),
+        catch exit(Pid1, kill),
+        catch exit(Pid2, kill),
+        Starter2 ! stop,
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+sentinel_registry_management_api_test(_Config) ->
+    catch application:stop(eredis),
+    catch application:stop(gproc),
+    {ok, _Started} = application:ensure_all_started(eredis),
+    Name = {eredis_SUITE, registry_management_api},
+    Unknown = {eredis_SUITE, registry_unknown},
+    Parent = self(),
+    Pid1 = spawn(fun() -> registry_target_loop(Parent) end),
+    Pid2 = spawn(fun() -> registry_target_loop(Parent) end),
+    try
+        ?assertEqual(yes, eredis_sentinel_registry:register_name(Name, Pid1)),
+        ?assertEqual(Pid1, eredis_sentinel_registry:whereis_name(Name)),
+        ?assertEqual(no, eredis_sentinel_registry:register_name(Name, Pid2)),
+        ?assertEqual(Pid1, eredis_sentinel_registry:send(Name, ping)),
+        receive
+            {Pid1, ping} ->
+                ok
+        after 1000 ->
+            ct:fail(registry_send_timeout)
+        end,
+        ?assertExit({badarg, {Unknown, ping}}, eredis_sentinel_registry:send(Unknown, ping)),
+        ?assertEqual(ok, eredis_sentinel_registry:unregister_name(Name)),
+        ?assertEqual(undefined, eredis_sentinel_registry:whereis_name(Name)),
+        Owner = eredis_sentinel_registry:whereis_name(Name),
+        ?assertEqual(undefined, Owner)
+    after
+        Pid1 ! stop,
+        Pid2 ! stop,
+        catch eredis_sentinel_registry:unregister_name(Name),
+        catch eredis_sentinel_registry:stop(),
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+sentinel_manager_ref_isolates_sentinel_state_test(_Config) ->
+    catch eredis_sentinel:stop(),
+    RedisPassword1 = "redis-password-1",
+    RedisPassword2 = "redis-password-2",
+    {RedisPort1, RedisAcceptor1} = start_fake_redis(RedisPassword1),
+    {RedisPort2, RedisAcceptor2} = start_fake_redis(RedisPassword2),
+    {SentinelPort1, SentinelAcceptor1} = start_fake_sentinel(auth_disabled, RedisPort1),
+    {SentinelPort2, SentinelAcceptor2} = start_fake_sentinel(auth_disabled, RedisPort2),
+    try
+        {ok, C1} = eredis:start_link(
+            sentinel_args_with_manager_ref(
+                SentinelPort1,
+                RedisPassword1,
+                {eredis_SUITE, sentinel_one}
+            )
+        ),
+        try
+            ?assertEqual({ok, <<"PONG">>}, eredis:q(C1, ["PING"])),
+            {ok, C2} = eredis:start_link(
+                sentinel_args_with_manager_ref(
+                    SentinelPort2,
+                    RedisPassword2,
+                    {eredis_SUITE, sentinel_two}
+                )
+            ),
+            try
+                ?assertEqual({ok, <<"PONG">>}, eredis:q(C2, ["PING"]))
+            after
+                eredis:stop(C2)
+            end
+        after
+            eredis:stop(C1)
+        end
+    after
+        cleanup_sentinel_test(RedisAcceptor1, SentinelAcceptor1),
+        cleanup_sentinel_test(RedisAcceptor2, SentinelAcceptor2)
+    end,
+    ok.
+
+sentinel_manager_stop_api_test(_Config) ->
+    catch application:stop(eredis),
+    catch application:stop(gproc),
+    {ok, _Started} = application:ensure_all_started(eredis),
+    Ref = {eredis_SUITE, stop_manager_api},
+    ManagerName = {eredis_sentinel, Ref},
+    catch eredis_sentinel:stop(ManagerName),
+    {ok, Pid} = eredis_sentinel:start_link([{"127.0.0.1", 26379}], [], ManagerName),
+    try
+        ?assertEqual(Pid, eredis_sentinel_registry:whereis_name(ManagerName)),
+        ?assertEqual(ok, eredis:stop_sentinel_manager(Ref)),
+        wait_until_dead(Pid),
+        ?assertEqual(ok, eredis:stop_sentinel_manager(Ref))
+    after
+        catch eredis_sentinel:stop(ManagerName),
+        catch application:stop(eredis),
+        catch application:stop(gproc)
+    end,
+    ok.
+
+start_link_args_without_sentinel_host_port_test(_Config) ->
+    {RedisPort, RedisAcceptor} = start_fake_redis(no_auth),
+    try
+        assert_start_link_args_ping([
+            {host, "127.0.0.1"},
+            {port, RedisPort},
+            {reconnect_sleep, no_reconnect},
+            {connect_timeout, 1000}
+        ])
+    after
+        RedisAcceptor ! stop
+    end.
+
+start_link_args_without_sentinel_servers_test(_Config) ->
+    {RedisPort, RedisAcceptor} = start_fake_redis(no_auth),
+    try
+        assert_start_link_args_ping([
+            {servers, [{"127.0.0.1", RedisPort}]},
+            {reconnect_sleep, no_reconnect},
+            {connect_timeout, 1000}
+        ])
+    after
+        RedisAcceptor ! stop
+    end.
+
 sentinel_credentials_not_inferred_test(_Config) ->
     SharedPassword = "shared-password",
     {RedisPort, RedisAcceptor} = start_fake_redis(SharedPassword),
@@ -559,6 +824,78 @@ sentinel_args(SentinelPort, ExtraArgs) ->
 
 sentinel_args(SentinelPort, RedisPassword, ExtraArgs) ->
     sentinel_args(SentinelPort, [{password, RedisPassword} | ExtraArgs]).
+
+sentinel_args_with_manager_ref(SentinelPort, RedisPassword, ManagerRef) ->
+    [
+        {servers, [{"127.0.0.1", SentinelPort}]},
+        {options, [{sentinel, "mymaster"}, {sentinel_manager_ref, ManagerRef}]},
+        {password, RedisPassword},
+        {reconnect_sleep, no_reconnect},
+        {connect_timeout, 1000}
+    ].
+
+start_sentinel_manager_from_owner(ManagerName) ->
+    Parent = self(),
+    Starter = spawn(fun() ->
+        Result = eredis_sentinel:start_link([{"127.0.0.1", 26379}], [], ManagerName),
+        Parent ! {self(), Result},
+        receive
+            stop ->
+                ok
+        end
+    end),
+    receive
+        {Starter, {ok, Pid}} ->
+            {Starter, Pid};
+        {Starter, Error} ->
+            ct:fail({failed_to_start_sentinel_manager, Error})
+    after 1000 ->
+        ct:fail(sentinel_manager_start_timeout)
+    end.
+
+wait_until_dead(Pid) ->
+    wait_until_dead(Pid, 10).
+
+wait_until_dead(Pid, 0) ->
+    ?assertNot(is_process_alive(Pid));
+wait_until_dead(Pid, Tries) ->
+    case is_process_alive(Pid) of
+        true ->
+            timer:sleep(10),
+            wait_until_dead(Pid, Tries - 1);
+        false ->
+            ok
+    end.
+
+stop_registered_process(Name) ->
+    case whereis(Name) of
+        undefined ->
+            ok;
+        Pid ->
+            exit(Pid, kill),
+            wait_until_dead(Pid)
+    end.
+
+registry_target_loop(Parent) ->
+    receive
+        stop ->
+            ok;
+        Msg ->
+            Parent ! {self(), Msg},
+            registry_target_loop(Parent)
+    end.
+
+assert_start_link_args_ping(Args) ->
+    case eredis:start_link(Args) of
+        {ok, C} ->
+            try
+                ?assertEqual({ok, <<"PONG">>}, eredis:q(C, ["PING"]))
+            after
+                eredis:stop(C)
+            end;
+        Error ->
+            ct:fail({start_link_failed, Error})
+    end.
 
 assert_sentinel_connection(
     #{name := Name, redis := RedisMode, sentinel := SentinelMode, args := Args}

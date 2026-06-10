@@ -36,8 +36,8 @@
 -behaviour(gen_server).
 
 %% API
--export([start_link/0, start_link/1, start_link/2, stop/0]).
--export([get_master/1, get_master/2, get_current_sentinel/0]).
+-export([start_link/0, start_link/1, start_link/2, start_link/3, stop/0, stop/1]).
+-export([get_master/1, get_master/2, get_master/3, get_current_sentinel/0, get_current_sentinel/1]).
 
 %% GenServer
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -76,8 +76,19 @@ start_link(Sentinels) ->
 start_link(Sentinels, Opts) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [Sentinels, Opts], []).
 
+start_link(Sentinels, Opts, ManagerName) ->
+    gen_server:start_link(server_ref(ManagerName), ?MODULE, [Sentinels, Opts], []).
+
 stop() ->
     gen_server:call(?MODULE, stop).
+
+stop(ManagerName) ->
+    case eredis_sentinel_registry:whereis_name(ManagerName) of
+        undefined ->
+            ok;
+        Pid ->
+            gen_server:call(Pid, stop)
+    end.
 
 get_master(MasterName) ->
     get_master(MasterName, false).
@@ -85,8 +96,17 @@ get_master(MasterName) ->
 get_master(MasterName, Notify) when is_atom(MasterName), is_boolean(Notify) ->
     gen_server:call(?MODULE, #get_master_req{master=MasterName, notify=Notify}).
 
+get_master(ManagerName, MasterName, Notify) when is_atom(MasterName), is_boolean(Notify) ->
+    gen_server:call(server_ref(ManagerName), #get_master_req{master=MasterName, notify=Notify}).
+
 get_current_sentinel() ->
     gen_server:call(?MODULE, get_current_sentinel).
+
+get_current_sentinel(ManagerName) ->
+    gen_server:call(server_ref(ManagerName), get_current_sentinel).
+
+server_ref(ManagerName) ->
+    {via, eredis_sentinel_registry, ManagerName}.
 
 %%% GenServer ---------------------------------------------------------
 
